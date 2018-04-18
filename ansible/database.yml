@@ -30,4 +30,10 @@
 
 - hosts: db
   roles:
-  - couchdb
+    - { role: couchdb,
+        when: db.backend == "CouchDB" }
+    - { role: mongodb,
+        when: db.backend == "MongoDB"}
+  post_tasks:
+    - import_tasks: tasks/initMongoDBReplicaSet.yml
+      when: db.backend == "MongoDB" and mode == "deploy"

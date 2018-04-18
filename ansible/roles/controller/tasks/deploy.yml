@@ -148,6 +148,14 @@
       "CONFIG_whisk_couchdb_databases_WhiskAuth": "{{ db.whisk.auth }}"
       "CONFIG_whisk_couchdb_databases_WhiskEntity": "{{ db.whisk.actions }}"
       "CONFIG_whisk_couchdb_databases_WhiskActivation": "{{ db.whisk.activations }}"
+      "CONFIG_whisk_mongodb_hosts": "{{ mongodb_connect_string }}"
+      "CONFIG_whisk_mongodb_username": "{{ db_username }}"
+      "CONFIG_whisk_mongodb_password": "{{ db_password }}"
+      "CONFIG_whisk_mongodb_replicaSet": "{{ db_replicaSet}}"
+      "CONFIG_whisk_mongodb_database": "{{ db_database }}"
+      "CONFIG_whisk_mongodb_collections_WhiskAuth": "{{ db.whisk.auth }}"
+      "CONFIG_whisk_mongodb_collections_WhiskEntity": "{{ db.whisk.actions }}"
+      "CONFIG_whisk_mongodb_collections_WhiskActivation": "{{ db.whisk.activations }}"
       "CONFIG_whisk_db_actionsDdoc": "{{ db_whisk_actions_ddoc | default() }}"
       "CONFIG_whisk_db_activationsDdoc": "{{ db_whisk_activations_ddoc | default() }}"
       "CONFIG_whisk_db_activationsFilterDdoc": "{{ db_whisk_activations_filter_ddoc | default() }}"
@@ -198,6 +206,7 @@
 
       "CONFIG_whisk_spi_LogStoreProvider": "{{ userLogs.spi }}"
       "CONFIG_whisk_spi_LoadBalancerProvider": "{{ controller.loadbalancer.spi }}"
+      "CONFIG_whisk_spi_ArtifactStoreProvider": "{{ database_spi }}"
       "CONFIG_logback_log_level": "{{ controller.loglevel }}"
 
       "CONFIG_whisk_transactions_stride": "{{ transactions.stride | default() }}"

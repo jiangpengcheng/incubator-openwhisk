@@ -23,6 +23,7 @@
   with_items:
     - "{{ openwhisk_home }}/ansible/files/whisks_design_document_for_entities_db_v2.1.0.json"
     - "{{ openwhisk_home }}/ansible/files/filter_design_document.json"
+  when: db.backend == "CouchDB"
 
 - include_tasks: db/recreateDoc.yml
   vars:
@@ -34,4 +35,12 @@
     - "{{ openwhisk_home }}/ansible/files/filter_design_document.json"
     - "{{ openwhisk_home }}/ansible/files/activations_design_document_for_activations_db.json"
     - "{{ openwhisk_home }}/ansible/files/logCleanup_design_document_for_activations_db.json"
-  when: db.whisk.activations != db.whisk.actions
+  when: db.backend == "CouchDB" and db.whisk.activations != db.whisk.actions
+
+- include_tasks: db/executeMongoShellScript.yml
+  vars:
+    scriptFile: "{{ item }}"
+  with_items:
+    - "mongodb_action_views.js"
+    - "mongodb_activation_views.js"
+  when: db.backend == "MongoDB"

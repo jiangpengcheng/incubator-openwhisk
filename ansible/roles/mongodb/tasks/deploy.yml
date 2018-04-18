@@ -1,0 +1,50 @@
+---
+# This role will run a MongoDB server on the db group
+- name: create key file for internal encryption
+  local_action: shell openssl rand -base64 756 > mongo.key
+  run_once: true
+
+- name: ensure mongodb config directory exists
+  file:
+    path: "{{ db.confdir }}"
+    state: directory
+
+- name: copy key file to mongodb node
+  copy:
+    src: mongo.key
+    dest: "{{ db.confdir }}"
+    mode: 0400
+
+- name: generate config file for mongod
+  template:
+    src: config.yaml.j2
+    dest: "{{ db.confdir }}/config"
+    mode: 0400
+
+- name: ensure mongodb log directory is created with permissions
+  file:
+    path: "{{ whisk_logs_dir }}/mongodb"
+    state: directory
+    mode: 0777
+  become: "{{ logs.dir.become }}"
+
+- name: (re)start mongodb
+  docker_container:
+    name: mongodb
+    image: mongo:{{ db.mongodb.version }}
+    command: --config /data/configdb/config
+    state: started
+    recreate: true
+    restart_policy: "{{ docker.restart.policy }}"
+    hostname: "mongodb"
+    volumes:
+      - "{{ whisk_logs_dir }}/mongodb:/logs"
+      - "{{ db.confdir }}:/data/configdb"
+      - "{{ db.mongodb.data_volume }}:/data/db"
+    expose:
+      - 27017
+    ports:
+      - "{{ db.mongodb.port }}:27017"
+
+- name: wait until the MongoDB in this host is up and running
+  local_action: wait_for host={{ ansible_host }} port={{ db.mongodb.port }} state=started delay=5 timeout=60

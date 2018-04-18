@@ -1,0 +1,12 @@
+# Remove MongoDB server
+
+- name: remove MongoDB
+  docker_container:
+    name: mongodb
+    state: absent
+    keep_volumes: False
+
+- name: remove MongoDB data volume
+  docker_volume:
+    name: "{{ db.mongodb.data_volume }}" 
+    state: absent

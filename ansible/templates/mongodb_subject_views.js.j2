@@ -1,0 +1,100 @@
+db = db.getSiblingDB("{{ db_database }}")
+db.auth("{{ db_username }}", "{{ db_password }}")
+
+db["{{ db.whisk.auth }}.namespaceThrottlings/blockedNamespaces"].drop()
+db["{{ db.whisk.auth }}.namespaceThrottlings/blockedNamespaces.reduce"].drop()
+db["{{ db.whisk.auth }}.subjects/identities"].drop()
+
+db.createView(
+	"{{ db.whisk.auth }}.namespaceThrottlings/blockedNamespaces",
+	"{{ db.whisk.auth }}",
+	[
+		{ "$lookup": { "from": "{{ db.whisk.auth }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+		{
+			"$facet": {
+				"limits": [
+					{ "$match": { "$and": [{ "_id": { "$regex": "/limits$" } }, { "$or": [{ "concurrentInvocations": 0 }, { "invocationsPerMinute": 0 }] }] } },
+					{ "$addFields": { "key": { "$substrBytes": ["$_id", 0, { "$add": [{ "$strLenBytes": "$_id" }, -7] }] } } }
+				],
+				"subjects": [
+					{ "$match": { "$and": [{ "blocked": { "$eq": true } }, { "subject": { "$ne": null } }, { "namespaces": { "$ne": null } }] } },
+					{ "$unwind": "$namespaces" },
+					{ "$addFields": { "key": "$namespaces.name" } }
+				]
+			}
+		},
+		{ "$project": { "final": { "$concatArrays": ["$limits", "$subjects"] } } },
+		{ "$unwind": "$final" },
+		{
+			"$project": {
+				"id": "$final._id",
+				"key": "$final.key",
+				"value": { "$literal": 1 },
+				"doc": { "$arrayElemAt": ["$final.doc", 0] }
+			}
+		}
+	]
+)
+
+db.createView(
+	"{{ db.whisk.auth }}.namespaceThrottlings/blockedNamespaces.reduce",
+	"{{ db.whisk.auth }}",
+	[
+		{
+			"$facet": {
+				"limits": [
+					{ "$match": { "$and": [{ "_id": { "$regex": " / limits$" } }, { "$or": [{ "concurrentInvocations": 0 }, { "invocationsPerMinute": 0 }] }] } },
+					{ "$addFields": { "key": { "$substrBytes": ["$_id", 0, { "$add": [{ "$strLenBytes": "$_id" }, -7] }] } } }
+				],
+				"subjects": [
+					{ "$match": { "$and": [{ "blocked": { "$eq": true } }, { "subject": { "$ne": null } }, { "namespaces": { "$ne": null } }] } },
+					{ "$unwind": "$namespaces" }, { "$addFields": { "key": "$namespaces.name" } }]
+			}
+		},
+		{ "$project": { "final": { "$concatArrays": ["$limits", "$subjects"] } } },
+		{ "$unwind": "$final" },
+		{
+			"$project": {
+				"id": "$final._id",
+				"key": "$final.key",
+				"value": { "$literal": 1 }
+			}
+		}
+	]
+)
+
+db.createView(
+	"{{ db.whisk.auth }}.subjects/identities",
+	"{{ db.whisk.auth }}",
+	[
+		{ "$unwind": "$namespaces" },
+		{
+			"$addFields": {
+				"value": {
+					"_id": { "$concat": ["$namespaces.name", "/limits"] },
+					"namespace": "$namespaces.name",
+					"uuid": "$namespaces.uuid",
+					"key": "$namespaces.key"
+				}
+			}
+		},
+		{
+			"$facet": {
+				"uuid": [{ "$project": { "key": ["$namespaces.uuid", "$namespaces.key"], "value": 1 } }],
+				"name": [{ "$project": { "key": ["$namespaces.name"], "value": 1 } }]
+			}
+		},
+		{ "$project": { "final": { "$concatArrays": ["$uuid", "$name"] } } },
+		{ "$unwind": "$final" },
+		{ "$addFields": { "limit_id": "$final.value._id" } },
+		{ "$lookup": { "from": "{{ db.whisk.auth }}", "localField": "limit_id", "foreignField": "_id", "as": "doc" } },
+		{
+			"$project": {
+				"key": "$final.key",
+				"value": "$final.value",
+				"id": "$final._id",
+				"doc": { "$arrayElemAt": ["$final.doc", 0] }
+			}
+		}
+	]
+)

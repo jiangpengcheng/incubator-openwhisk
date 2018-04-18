@@ -1,0 +1,332 @@
+db = db.getSiblingDB("{{ db_database }}")
+db.auth("{{ db_username }}", "{{ db_password }}")
+
+db["{{ db.whisk.actions }}.whisks.v2.1.0/packages"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/packages.reduce"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/packages-public"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/packages-public.reduce"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/rules"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/rules.reduce"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/triggers"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/triggers.reduce"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/actions"].drop()
+db["{{ db.whisk.actions }}.whisks.v2.1.0/actions.reduce"].drop()
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/packages",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "binding": { "$exists": true } } },
+        { "$lookup": { "from": "{{ db.whisk.actions }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+        {
+            "$project": {
+                "key": ["$namespace", "$updated"],
+                "value": {
+                    "namespace": "$namespace",
+                    "name": "$name",
+                    "version": "$version",
+                    "publish": "$publish",
+                    "annotations": "$annotations",
+                    "updated": "$updated"
+                },
+                "_id": 0,
+                "id": "$_id",
+                "doc": { "$arrayElemAt": ["$doc", 0] }
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/packages.reduce",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "binding": { "$exists": true } } },
+        {
+            "$project": {
+                "key": ["$namespace", "$updated"],
+                "value": { "$literal": 1 },
+                "_id": 0,
+                "id": "$_id",
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/packages-public",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "$and": [{ "binding": {} }, { "publish": true }] } },
+        { "$lookup": { "from": "{{ db.whisk.actions }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+        {
+            "$project": {
+                "key": ["$namespace", "$updated"],
+                "value": {
+                    "namespace": "$namespace",
+                    "name": "$name",
+                    "version": "$version",
+                    "publish": "$publish",
+                    "annotations": "$annotations",
+                    "updated": "$updated",
+                    "binding": { "$literal": false }
+                },
+                "_id": 0,
+                "id": "$_id",
+                "doc": { "$arrayElemAt": ["$doc", 0.0] }
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/packages-public.reduce",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "$and": [{ "binding": {} }, { "publish": true }] } },
+        {
+            "$project": {
+                "key": ["$namespace", "$updated"],
+                "value": { "$literal": 1 },
+                "_id": 0,
+                "id": "$_id"
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/rules",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "trigger": { "$exists": true } } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": { "$literal": 1 },
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        { "$lookup": { "from": "{{ db.whisk.actions }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+        {
+            "$facet": {
+                "namespaces": [{ "$addFields": { "key": ["$namespace", "$updated"] } }],
+                "packages": [
+                    { "$match": { "flag": { "$ne": -1 } } },
+                    {
+                        "$addFields": {
+                            "key": ["$root", "$updated"]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "$project": {
+                "final": { "$concatArrays": ["$namespaces", "$packages"] }
+            }
+        },
+        { "$unwind": "$final" },
+        {
+            "$project": {
+                "key": "$final.key",
+                "value": "$final.value",
+                "doc": { "$arrayElemAt": ["$final.doc", 0] },
+                "id": "$final._id"
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/rules.reduce",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "trigger": { "$exists": true } } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": { "$literal": 1 },
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        {
+            "$facet": {
+                "namespaces": [
+                    { "$addFields": { "key": ["$namespace", "$updated"] } }
+                ],
+                "packages":
+                    [
+                        { "$match": { "flag": { "$ne": -1 } } },
+                        { "$addFields": { "key": ["$root", "$updated"] } }
+                    ]
+            }
+        },
+        { "$project": { "final": { "$concatArrays": ["$namespaces", "$packages"] } } },
+        { "$unwind": "$final" },
+        { "$project": { "key": "$final.key", "value": "$final.value", "id": "$final._id" } }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/triggers",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "entityType": "trigger" } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": {
+                    "namespace": "$namespace",
+                    "name": "$name",
+                    "version": "$version",
+                    "publish": "$publish",
+                    "annotations": "$annotations",
+                    "updated": "$updated"
+                },
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        { "$lookup": { "from": "{{ db.whisk.actions }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+        {
+            "$facet": {
+                "namespaces": [
+                    { "$addFields": { "key": ["$namespace", "$updated"] } }
+                ],
+                "packages": [
+                    { "$match": { "flag": { "$ne": -1 } } },
+                    { "$addFields": { "key": ["$root", "$updated"] } }
+                ]
+            }
+        },
+        { "$project": { "final": { "$concatArrays": ["$namespaces", "$packages"] } } },
+        { "$unwind": "$final" },
+        {
+            "$project": {
+                "key": "$final.key",
+                "value": "$final.value",
+                "doc": { "$arrayElemAt": ["$final.doc", 0] },
+                "id": "$final._id"
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/triggers.reduce",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "entityType": "trigger" } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": { "$literal": 1 },
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        {
+            "$facet": {
+                "namespaces": [
+                    { "$addFields": { "key": ["$namespace", "$updated"] } }
+                ],
+                "packages": [
+                    { "$match": { "flag": { "$ne": -1 } } },
+                    { "$addFields": { "key": ["$root", "$updated"] } }
+                ]
+            }
+        },
+        { "$project": { "final": { "$concatArrays": ["$namespaces", "$packages"] } } },
+        { "$unwind": "$final" },
+        {
+            "$project": {
+                "key": "$final.key",
+                "value": "$final.value",
+                "id": "$final._id"
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/actions",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "exec": { "$exists": true } } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": {
+                    "namespace": "$namespace",
+                    "name": "$name",
+                    "version": "$version",
+                    "publish": "$publish",
+                    "annotations": "$annotations",
+                    "limits": "$limits",
+                    "exec": {
+                        "binary": { "$ifNull": ["$exec.binary", false] }
+                    }
+                },
+                "updated": "$updated",
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        { "$lookup": { "from": "{{ db.whisk.actions }}", "localField": "_id", "foreignField": "_id", "as": "doc" } },
+        {
+            "$facet": {
+                "namespaces": [
+                    { "$addFields": { "key": ["$namespace", "$updated"] } }
+                ],
+                "packages": [
+                    { "$match": { "flag": { "$ne": -1 } } },
+                    { "$addFields": { "key": ["$root", "$updated"] } }
+                ]
+            }
+        },
+        { "$project": { "final": { "$concatArrays": ["$namespaces", "$packages"] } } },
+        { "$unwind": "$final" },
+        {
+            "$project": {
+                "key": "$final.key",
+                "value": "$final.value",
+                "doc": { "$arrayElemAt": ["$final.doc", 0] },
+                "id": "$final._id"
+            }
+        }
+    ]
+)
+
+db.createView(
+    "{{ db.whisk.actions }}.whisks.v2.1.0/actions.reduce",
+    "{{ db.whisk.actions }}",
+    [
+        { "$match": { "exec": { "$exists": true } } },
+        {
+            "$addFields": {
+                "root": { "$arrayElemAt": [{ "$split": ["$namespace", "/"] }, 0] },
+                "value": { "$literal": 1 },
+                "flag": { "$indexOfBytes": ["$namespace", "/"] }
+            }
+        },
+        {
+            "$facet": {
+                "namespaces": [
+                    { "$addFields": { "key": ["$namespace", "$updated"] } }
+                ],
+                "packages": [
+                    { "$match": { "flag": { "$ne": -1 } } },
+                    {
+                        "$addFields": { "key": ["$root", "$updated"] }
+                    }
+                ]
+            }
+        },
+        { "$project": { "final": { "$concatArrays": ["$namespaces", "$packages"] } } },
+        { "$unwind": "$final" },
+        {
+            "$project": {
+                "key": "$final.key",
+                "value": "$final.value",
+                "id": "$final._id"
+            }
+        }]
+)
