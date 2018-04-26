@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.core.database
+package whisk.core.database.mongodb
 
 import java.io.{ByteArrayInputStream, InputStream}
 import java.nio.ByteBuffer
@@ -37,6 +37,7 @@ import org.mongodb.scala.model._
 import org.mongodb.scala.MongoClient
 import spray.json._
 import whisk.common.{Logging, LoggingMarkers, TransactionId}
+import whisk.core.database._
 import whisk.core.entity._
 
 case class MongoFile(_id: String, filename: String, metadata: Map[String, String])

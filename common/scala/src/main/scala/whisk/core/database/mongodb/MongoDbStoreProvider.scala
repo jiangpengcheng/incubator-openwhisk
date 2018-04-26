@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.core.database
+package whisk.core.database.mongodb
 
 import java.net.URLEncoder
 
@@ -25,6 +25,7 @@ import org.mongodb.scala.MongoClient
 import spray.json.RootJsonFormat
 import whisk.common.Logging
 import whisk.core.ConfigKeys
+import whisk.core.database._
 import whisk.core.entity.DocumentReader
 import pureconfig._
 
