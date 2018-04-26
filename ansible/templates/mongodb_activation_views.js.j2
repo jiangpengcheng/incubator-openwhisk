@@ -42,7 +42,7 @@ db.createView(
                     "activationId": "$activationId",
                     "start": "$start",
                     "end": "$end",
-                    "duration": "$duration",
+                    "duration": {$cond: [{$eq: ["$end", null]}, null, {$subtract: ["$end", "$start"]}]},
                     "cause": "$cause",
                     "statusCode": "$response.statusCode"
                 },
@@ -93,7 +93,7 @@ db.createView(
                     "activationId": "$activationId",
                     "start": "$start",
                     "end": "$end",
-                    "duration": "$duration",
+                    "duration": {$cond: [{$eq: ["$end", null]}, null, {$subtract: ["$end", "$start"]}]},
                     "cause": "$cause",
                     "statusCode": "$response.statusCode"
                 },

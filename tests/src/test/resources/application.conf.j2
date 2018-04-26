@@ -2,6 +2,7 @@ whisk.spi {
   SimpleSpi = whisk.spi.SimpleSpiImpl
   MissingSpi = whisk.spi.MissingImpl
   MissingModule = missing.module
+  ArtifactStoreProvider = {{ database_spi }}
 }
 
 # Blocking requests fall back to non-blocking after ~60s
@@ -46,6 +47,19 @@ whisk {
         }
     }
 
+    mongodb {
+        hosts       = "{{ mongodb_connect_string }}"
+        replica-set = "{{ db_replicaSet }}"
+        database    = "{{ db_database }}"
+        username    = "{{ db_username }}"
+        password    = "{{ db_password }}"
+        collections {
+          WhiskAuth       = "{{ db.whisk.auth }}"
+          WhiskEntity     = "{{ db.whisk.actions }}"
+          WhiskActivation = "{{ db.whisk.activations }}"
+        }
+    }
+        
     controller {
       protocol = {{ controller.protocol }}
       https {

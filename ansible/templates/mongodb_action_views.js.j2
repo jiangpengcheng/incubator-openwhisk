@@ -27,7 +27,8 @@ db.createView(
                     "version": "$version",
                     "publish": "$publish",
                     "annotations": "$annotations",
-                    "updated": "$updated"
+                    "updated": "$updated",
+                    "binding": {$cond: [{$eq: ["$binding", {}]}, false, "$binding"]}
                 },
                 "_id": 0,
                 "id": "$_id",
@@ -262,11 +263,11 @@ db.createView(
                     "publish": "$publish",
                     "annotations": "$annotations",
                     "limits": "$limits",
+                    "updated": "$updated",
                     "exec": {
                         "binary": { "$ifNull": ["$exec.binary", false] }
                     }
                 },
-                "updated": "$updated",
                 "flag": { "$indexOfBytes": ["$namespace", "/"] }
             }
         },

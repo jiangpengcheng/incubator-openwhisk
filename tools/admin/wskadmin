@@ -21,6 +21,7 @@
 # Whisk Admin command line interface
 ##
 
+import abc
 import argparse
 import json
 import os
@@ -45,6 +46,11 @@ from wskutil import request
 DB_PROTOCOL = 'DB_PROTOCOL'
 DB_HOST     = 'DB_HOST'
 DB_PORT     = 'DB_PORT'
+
+DB_CONNECT_STRING = 'DB_CONNECT_STRING'
+DB_REPLICA_SET    = 'DB_REPLICA_SET'
+DB_DATABASE       = 'DB_DATABASE'
+
 DB_USERNAME = 'DB_USERNAME'
 DB_PASSWORD = 'DB_PASSWORD'
 
@@ -59,13 +65,235 @@ CLI_DIR = os.path.dirname(os.path.realpath(sys.argv[0]))
 # ROOT_DIR is the repository root
 ROOT_DIR = os.path.join(os.path.join(CLI_DIR, os.pardir), os.pardir)
 
+class NotSupportedOperation(Exception):
+    pass
+
+class Response(object):
+    """unified response of database operation"""    
+    def __init__(self, return_status, data):
+        self.status = return_status
+        self.data = data
+
+    def read(self):
+        return self.data
+
+class Database(object):
+    __metaclass__ = abc.ABCMeta
+    @abc.abstractmethod
+    def get(self, table, doc_id, verbose=False):
+        return
+
+    @abc.abstractmethod
+    def insert(self, table, doc, verbose=False):
+        return
+
+    @abc.abstractmethod
+    def delete(self, table, doc, verbose=False):
+        return
+
+    @abc.abstractmethod
+    def list(self, table, view, key, verbose=False):
+        return
+
+    @abc.abstractmethod
+    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+        return
+
+class MongoDB(Database):
+    def __init__(self, props):
+        from pymongo import MongoClient
+        uri = "mongodb://%(username)s:%(password)s@%(hosts)s/?replicaSet=%(replicaSet)s&authSource=%(database)s" % {
+            'username': quote_plus(props[DB_USERNAME]),
+            'password': quote_plus(props[DB_PASSWORD]),
+            'hosts': props[DB_CONNECT_STRING],
+            'replicaSet': props[DB_REPLICA_SET],
+            'database': props[DB_DATABASE]
+        }
+
+        self.client = MongoClient(uri)
+        self.database = self.client[props[DB_DATABASE]]
+
+    def get(self, table, doc_id, verbose=False):
+        coll = self.database[table]
+        res = coll.find_one({"_id": doc_id})
+        compatible_status = 200 if res else 404 
+        response = res if res else {"error": "not found", "reason": "missing"}
+        return (res, Response(compatible_status, json.dumps(response)))
+
+    def insert(self, table, doc, verbose=False):
+        coll = self.database[table]
+        coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return Response(201, json.dumps({"response": "201 Created"}))
+        
+    def delete(self, table, doc, verbose=False):
+        coll = self.database[table]
+        res = coll.delete_one({'_id': doc['_id']})
+        if res.deleted_count == 1:
+            return Response(200, json.dumps({"response": "Deleted"}))
+        else:
+            return Response(404, json.dumps({"response": "Document: %s not found" % doc['_id']}))
+
+    def list(self, table, view, key, verbose=False):
+        coll = self.database["%s.%s" % (table, view)]
+        res = coll.aggregate([{"$match": {"key": key}}])
+        nslist = []
+        for row in res:
+            nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key'], "namespace": row['value']['namespace']})
+        return(nslist, Response(200, json.dumps(nslist)))
+
+    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+        res = None
+        if view == "":
+            coll = self.database[table]
+            if include_docs:
+                res = coll.aggregate(
+                    [
+                        {"$lookup": {"from": table, "localField": "_id", "foreignField": "_id", "as": "doc"}},
+                        {"$project": {"key": "_id", "id": "_id", "_id": 0, "doc": {"$arrayElemAt": ["$doc", 0]}}}
+                    ]
+                )
+            else:
+                res = coll.aggregate([{"$project": {"key": "_id", "id": "_id", "_id": 0}}])
+        else:
+            coll = self.database["%s.%s" % (table, view)]
+            if include_docs:
+                res = coll.find()
+            else:
+                res = coll.aggregate({"$project": {"doc": 0}})
+
+        print(json.dumps(list(res), sort_keys=True, indent=4, separators=(',', ': ')))
+        return 0
+
+class CouchDB(Database):
+    def __init__(self, props):
+        self.auth     = "%s:%s" % (props[DB_USERNAME], props[DB_PASSWORD])
+        self.base_url = "%(protocol)s://%(host)s:%(port)s" % {
+            'protocol': props[DB_PROTOCOL],
+            'host': props[DB_HOST],
+            'port': props[DB_PORT]
+        }
+        self.headers = {
+            'Content-Type': 'application/json',
+        }
+
+    def _do_request(self, method, url, body='', verbose=False):
+        return request(method, url, headers=self.headers, body=body, auth=self.auth, verbose=verbose)
+
+    def get(self, table, doc_id, verbose=False):
+        doc_id = quote_plus(doc_id)
+        url = '%(base)s/%(database)s/%(subject)s' % {
+            'base'    : self.base_url,
+            'database': table,
+            'subject' : doc_id
+        }
+
+        res = self._do_request('GET', url, verbose=verbose)
+        if res.status == 200:
+            doc = json.loads(res.read())
+            return (doc, Response(res.status, res.read()))
+        else:
+            return (None, Response(res.status, res.read()))
+
+    def insert(self, table, doc, verbose=False):
+        url = '%(base)s/%(database)s' % {
+            'base'    : self.base_url,
+            'database': table
+        }
+        body = json.dumps(doc)
+
+        res = self._do_request('POST', url, body=body, verbose=verbose)
+        return Response(res.status, res.read())
+
+    def delete(self, table, doc, verbose=False):
+        url = '%(base)s/%(database)s/%(docid)s?rev=%(rev)s' % {
+            'base'    : self.base_url,
+            'database': table,
+            'docid'   : doc['_id'],
+            'rev'     : doc['_rev']
+        }
+        res = self._do_request('DELETE', url, verbose=verbose)
+        return Response(res.status, res.read())
+
+    def list(self, table, view, key, verbose=False):
+        try:
+            parts = view.split('/')
+            designdoc = parts[0]
+            viewname  = parts[1]
+        except:
+            print('view name "%s" is not formatted correctly, should be design/view' % view)
+            return 2
+
+        url = '%(base)s/%(database)s/_design/%(design)s/_view/%(view)s?key=%(key)s' % {
+            'base'    : self.base_url,
+            'database': table,
+            'design'  : designdoc,
+            'view'    : viewname,
+            'key'     : str(key)
+        }
+
+        res = self._do_request('GET', url, verbose=verbose)
+        nslist = None
+        if res.status == 200:
+            doc = json.loads(res.read())
+            nslist = []
+            if 'rows' in doc and len(doc['rows']) > 0:
+                for row in doc['rows']:
+                    if 'id' in row:
+                        nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key'], "namespace": row['value']['namespace']})
+        return (nslist, Response(res.status, res.read()))
+
+    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+        if view:
+            try:
+                parts = view.split('/')
+                designdoc = parts[0]
+                viewname  = parts[1]
+            except:
+                print('view name "%s" is not formatted correctly, should be design/view' % view)
+                return 2
+
+        url = '%(base)s/%(database)s%(design)s/%(index)s?reduce=false&include_docs=%(docs)s' % {
+            'base'    : self.base_url,
+            'database': table,
+            'design'  : '/_design/' + designdoc +'/_view' if view else '',
+            'index'   : viewname if view else '_all_docs',
+            'docs'    : 'true' if include_docs else 'false'
+        }
+
+        print('getting contents for %s (%s)' % (table, view if view else 'primary index'))
+        res = self._do_request('GET', url, verbose=verbose)
+        if res.status == 200:
+            table = json.loads(res.read())
+            print(json.dumps(table, sort_keys=True, indent=4, separators=(',', ': ')))
+            return 0
+        print('Failed to get database (%s)' % res.read().strip())
+        return 1
+
+DATABASE_DRIVER = None
+AVAILABLE_DATABASE_DRIVERS = {
+    "couchdb": CouchDB,
+    "mongodb": MongoDB
+}
+
+def database_driver(database_backend, props):
+    try:
+        return AVAILABLE_DATABASE_DRIVERS[database_backend.lower()](props)
+    except KeyError:
+        raise Exception("Not supported database backend: %s" % (database_backend.lower()))
+
 def main():
-    requiredprops = [
-        DB_PROTOCOL, DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD,
-        DB_WHISK_AUTHS, DB_WHISK_ACTIONS, DB_WHISK_ACTIVATIONS,
-        LOGS_DIR ]
     whiskprops = wskprop.importPropsIfAvailable(wskprop.propfile(ROOT_DIR))
+    databaseSpecifiedProps = {
+      "CouchDB": [DB_PROTOCOL, DB_HOST, DB_PORT],
+      "MongoDB": [DB_CONNECT_STRING, DB_REPLICA_SET, DB_DATABASE]
+    }
+    requiredprops = [
+        DB_USERNAME, DB_PASSWORD, DB_WHISK_AUTHS, DB_WHISK_ACTIONS, DB_WHISK_ACTIVATIONS, LOGS_DIR
+    ] + databaseSpecifiedProps[whiskprops.get("DB_BACKEND", "CouchDB")]
     (valid, props, deferredInfo) = wskprop.checkRequiredProperties(requiredprops, whiskprops)
+
+    global DATABASE_DRIVER
+    DATABASE_DRIVER = database_driver(whiskprops.get("DB_BACKEND", "CouchDB"), props)
 
     exitCode = 0 if valid else 2
     if valid:
@@ -280,17 +508,17 @@ def getUserCmd(args, props):
                 print('%s\t%s:%s' % (ns['name'], ns['uuid'], ns['key']))
             return 0
         else:
-          # if requesting key for specific namespace, report only that key;
-          # use default namespace if no namespace provided
-          namespaceName = args.namespace if args.namespace is not None else args.subject
-          namespaces = [ns for ns in doc['namespaces'] if ns['name'] == namespaceName]
-          if len(namespaces) == 1:
-              ns = namespaces[0]
-              print('%s:%s' % (ns['uuid'], ns['key']))
-              return 0
-          else:
-              print('namespace "%s" not found for "%s"' % (namespaceName, args.subject))
-              return 1
+            # if requesting key for specific namespace, report only that key;
+            # use default namespace if no namespace provided
+            namespaceName = args.namespace if args.namespace is not None else args.subject
+            namespaces = [ns for ns in doc['namespaces'] if ns['name'] == namespaceName]
+            if len(namespaces) == 1:
+                ns = namespaces[0]
+                print('%s:%s' % (ns['uuid'], ns['key']))
+                return 0
+            else:
+                print('namespace "%s" not found for "%s"' % (namespaceName, args.subject))
+                return 1
     else:
         print('Failed to get subject (%s)' % res.read().strip())
         return 1
@@ -316,70 +544,16 @@ def listUserCmd(args, props):
         return 1
 
 def getDocumentFromDb(props, doc, verbose):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
     database = props[DB_WHISK_AUTHS]
-
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s/%(subject)s' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'database': database,
-        'subject' : doc
-    }
-
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    res = request('GET', url, headers=headers, auth='%s:%s' % (username, password), verbose=verbose)
-    if res.status == 200:
-        doc = json.loads(res.read())
-        return (doc, res)
-    else:
-        return (None, res)
+    return DATABASE_DRIVER.get(database, doc, verbose)
 
 def getIdentitiesFromNamespace(args, props):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
     database = props[DB_WHISK_AUTHS]
+    view = "subjects/identities"
 
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s/_design/subjects/_view/identities?key=["%(ns)s"]' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'username': username,
-        'database': database,
-        'ns'      : args.namespace
-    }
-
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    res = request('GET', url, headers=headers, auth='%s:%s' % (username, password), verbose=args.verbose)
-    nslist = None
-    if res.status == 200:
-        doc = json.loads(res.read())
-        nslist = []
-        if 'rows' in doc and len(doc['rows']) > 0:
-            for row in doc['rows']:
-                if 'id' in row:
-                    nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key']})
-    return (nslist, res)
+    return DATABASE_DRIVER.list(database, view, [args.namespace], args.verbose)
 
 def deleteUserCmd(args, props):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
     database = props[DB_WHISK_AUTHS]
 
     if args.subject.strip() == '':
@@ -396,20 +570,8 @@ def deleteUserCmd(args, props):
         return 1
 
     if not args.namespace:
-        url = '%(protocol)s://%(host)s:%(port)s/%(database)s/%(subject)s?rev=%(rev)s' % {
-            'protocol': protocol,
-            'host'    : host,
-            'port'    : port,
-            'database': database,
-            'subject' : args.subject.strip(),
-            'rev'     : prev['_rev']
-        }
+        res = DATABASE_DRIVER.delete(database, prev, args.verbose)
 
-        headers = {
-            'Content-Type': 'application/json',
-        }
-
-        res = request('DELETE', url, headers=headers, auth='%s:%s' % (username, password), verbose=args.verbose)
         if res.status in [200, 202]:
             print('Subject deleted')
         else:
@@ -431,40 +593,18 @@ def deleteUserCmd(args, props):
                 return 1
 
 def whoisUserCmd(args, props):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
-    database = props[DB_WHISK_AUTHS]
-
+    database  = props[DB_WHISK_AUTHS]
     authParts = args.authkey.split(':')
-    uuid      = authParts[0]
-    key       = authParts[1]
+    view      = "subjects/identities"
 
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s/_design/subjects/_view/identities?key=["%(uuid)s","%(key)s"]' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'username': username,
-        'database': database,
-        'uuid'    : uuid,
-        'key'     : key
-    }
+    nslist, res = DATABASE_DRIVER.list(database, view, authParts, args.verbose)
 
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    res = request('GET', url, headers=headers, auth='%s:%s' % (username, password), verbose=args.verbose)
     if res.status == 200:
-        doc = json.loads(res.read())
-        if 'rows' in doc and len(doc['rows']) > 0:
-            for row in doc['rows']:
-                if 'id' in row:
-                    print('subject: %s' % row['id'])
-                    print('namespace: %s' % row['value']['namespace'])
-        else:
+        for ns in nslist:
+            print('subject: %s' % ns['subject'])
+            print('namespace: %s' % ns['namespace'])
+
+        if len(nslist) == 0:
             print('Subject id is not recognized')
         return 0
     print('Failed to get subject (%s)' % res.read().strip())
@@ -513,7 +653,7 @@ def unblockUserCmd(args, props):
 def setLimitsCmd(args, props):
     argsDict = vars(args)
     docId = args.namespace + "/limits"
-    (dbDoc, res) = getDocumentFromDb(props, quote_plus(docId), args.verbose)
+    (dbDoc, res) = getDocumentFromDb(props, docId, args.verbose)
     doc = dbDoc or {'_id': docId}
 
     limits = ['invocationsPerMinute', 'firesPerMinute', 'concurrentInvocations']
@@ -533,7 +673,7 @@ def setLimitsCmd(args, props):
 def getLimitsCmd(args, props):
     argsDict = vars(args)
     docId = args.namespace + "/limits"
-    (dbDoc, res) = getDocumentFromDb(props, quote_plus(docId), args.verbose)
+    (dbDoc, res) = getDocumentFromDb(props, docId, args.verbose)
 
     if dbDoc is not None:
         limits = ['invocationsPerMinute', 'firesPerMinute', 'concurrentInvocations']
@@ -551,47 +691,24 @@ def getLimitsCmd(args, props):
 
 def deleteLimitsCmd(args, props):
     argsDict = vars(args)
-    docId = quote_plus(args.namespace + "/limits")
+    docId = args.namespace + "/limits"
     (dbDoc, res) = getDocumentFromDb(props, docId, args.verbose)
 
     if dbDoc is None:
         print('Failed to delete limits (%s)' % res.read().strip())
         return 1
 
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
     database = props[DB_WHISK_AUTHS]
+    res = DATABASE_DRIVER.delete(database, dbDoc, args.verbose)
 
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s/%(docid)s?rev=%(rev)s' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'database': database,
-        'docid'   : docId,
-        'rev'     : dbDoc['_rev']
-    }
-
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    res = request('DELETE', url, headers=headers, auth='%s:%s' % (username, password), verbose=args.verbose)
     if res.status in [200, 202]:
         print('Limits deleted')
+        return 0
     else:
         print('Failed to delete limits (%s)' % res.read().strip())
         return 1
 
 def getDbCmd(args, props):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
-
     if args.database == 'subjects':
         database = props[DB_WHISK_AUTHS]
     elif args.database == 'whisks':
@@ -601,59 +718,11 @@ def getDbCmd(args, props):
     else:
         database = args.database
 
-    if args.view:
-        try:
-            parts = args.view.split('/')
-            designdoc = parts[0]
-            viewname  = parts[1]
-        except:
-            print('view name "%s" is not formatted correctly, should be design/view' % args.view)
-            return 2
-
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s%(design)s/%(index)s?reduce=false&include_docs=%(docs)s' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'database': database,
-        'design'  : '/_design/' + designdoc +'/_view' if args.view else '',
-        'index'   : viewname if args.view else '_all_docs',
-        'docs'    : 'true' if args.docs else 'false'
-    }
-
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    print('getting contents for %s (%s)' % (database, args.view if args.view else 'primary index'))
-    res = request('GET', url, headers=headers, auth='%s:%s' % (username, password), verbose=args.verbose)
-    if res.status == 200:
-        table = json.loads(res.read())
-        print(json.dumps(table, sort_keys=True, indent=4, separators=(',', ': ')))
-        return 0
-    print('Failed to get database (%s)' % res.read().strip())
-    return 1
+    return DATABASE_DRIVER.get_by_view(database, args.verbose, args.view, args.docs)
 
 def insertIntoDatabase(props, doc, verbose = False):
-    protocol = props[DB_PROTOCOL]
-    host     = props[DB_HOST]
-    port     = props[DB_PORT]
-    username = props[DB_USERNAME]
-    password = props[DB_PASSWORD]
     database = props[DB_WHISK_AUTHS]
-
-    url = '%(protocol)s://%(host)s:%(port)s/%(database)s' % {
-        'protocol': protocol,
-        'host'    : host,
-        'port'    : port,
-        'database': database
-    }
-    body = json.dumps(doc)
-    headers = {
-        'Content-Type': 'application/json',
-    }
-
-    res = request('POST', url, body, headers, auth='%s:%s' % (username, password), verbose=verbose)
-    return res
+    return DATABASE_DRIVER.insert(database, doc, verbose)
 
 def getLogsCmd(args, props):
     def getComponentLogs(component):

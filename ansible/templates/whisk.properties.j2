@@ -77,10 +77,13 @@ docker.tls.cmd=
 docker.addHost.cmd=
 docker.dns.cmd={{ docker_dns }}
 docker.restart.opts={{ docker.restart.policy }}
-
+db.backend={{ db.backend }}
 db.provider={{ db_provider }}
 db.protocol={{ db_protocol }}
 db.host={{ db_host }}
+db.connect.string={{ mongodb_connect_string }}
+db.replica.set={{ db_replicaSet }}
+db.database={{ db_database }}
 db.port={{ db_port }}
 db.username={{ db_username }}
 db.password={{ db_password }}

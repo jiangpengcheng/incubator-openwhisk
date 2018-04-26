@@ -181,7 +181,11 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     val start = transid.started(this, LoggingMarkers.DATABASE_QUERY, s"[QUERY] '$collection' searching '$table")
 
     val fields = if (includeDocs) IndexedSeq("id", "key", "value", "doc") else IndexedSeq("id", "key", "value")
-    val sort = if (descending) Sorts.descending("key") else Sorts.ascending("key")
+
+    // the default mongodb sort order for array is different, for descending, it only compare the largest element, and
+    // for ascending, it compare the smallest element, so for an array, we need compare its elements one by one
+    val sort_fields = 0 to startKey.size map { "key." + _ }
+    val sort = if (descending) Sorts.descending(sort_fields: _*) else Sorts.ascending(sort_fields: _*)
 
     //it's available for the startKey being an empty list, while endKey is not
     val query =
@@ -368,7 +372,7 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
   }
 
   override def shutdown(): Unit = {
-    client.close()
+    logging.info(this, "mongo-scala-driver doesn't need to manage connections explicitly")
   }
 
   private def reportFailure[T, U](f: Future[T], onFailure: Throwable => U): Future[T] = {

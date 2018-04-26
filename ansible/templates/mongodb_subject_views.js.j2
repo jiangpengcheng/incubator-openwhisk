@@ -67,6 +67,7 @@ db.createView(
 	"{{ db.whisk.auth }}.subjects/identities",
 	"{{ db.whisk.auth }}",
 	[
+	        { "$match": {"blocked": {"$ne": true} }},
 		{ "$unwind": "$namespaces" },
 		{
 			"$addFields": {
