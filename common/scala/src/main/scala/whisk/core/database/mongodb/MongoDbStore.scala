@@ -19,6 +19,7 @@ package whisk.core.database.mongodb
 
 import java.io.{ByteArrayInputStream, InputStream}
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 
 import scala.concurrent.Future
 import akka.actor.ActorSystem
@@ -34,11 +35,15 @@ import org.mongodb.scala.bson.BsonString
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.gridfs.GridFSBucket
 import org.mongodb.scala.model._
-import org.mongodb.scala.MongoClient
+import org.mongodb.scala.{DuplicateKeyException, MongoClient, MongoException}
 import spray.json._
 import whisk.common.{Logging, LoggingMarkers, TransactionId}
 import whisk.core.database._
 import whisk.core.entity._
+import whisk.core.database.StoreUtils._
+import whisk.http.Messages
+
+import scala.util.{Failure, Success}
 
 case class MongoFile(_id: String, filename: String, metadata: Map[String, String])
 object MongoFile extends DefaultJsonProtocol {
@@ -73,23 +78,70 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
   private val jsonWriteSettings = JsonWriterSettings.builder().outputMode(JsonMode.RELAXED).build
 
+  // calculate the revision manually, to be compatible with couchdb's _rev
+  def revision_calculate(doc: JsObject): (String, String) = {
+    val md: MessageDigest = MessageDigest.getInstance("MD5")
+    val new_rev = md.digest(doc.toString.getBytes()).map(0xFF & _).map { "%02x".format(_) }.foldLeft("") { _ + _ }
+    doc.fields
+      .get("_rev")
+      .map { value =>
+        val start = value.toString.split("-").apply(0).toInt + 1
+        (value.toString, s"$start-$new_rev")
+      }
+      .getOrElse {
+        ("", s"1-$new_rev")
+      }
+  }
+
   override protected[database] def put(d: DocumentAbstraction)(implicit transid: TransactionId): Future[DocInfo] = {
+    //TODO: support bulk put
     val asJson = d.toDocumentRecord
 
     val id: String = asJson.fields("_id").convertTo[String].trim
     require(!id.isEmpty, "document id must be defined")
 
-    val docinfoStr = s"id: $id"
+    val (old_rev, rev) = revision_calculate(asJson)
+    val docinfoStr = s"id: $id, rev: $rev"
     val start =
       transid.started(this, LoggingMarkers.DATABASE_SAVE, s"[PUT] '$collection' saving document: '${docinfoStr}'")
 
+    val data = JsObject(asJson.fields + ("_rev" -> rev.toJson))
+    val filters =
+      if (rev.startsWith("1-")) {
+        // for new document, we should get no matched document and insert new one
+        // if there is a matched document, that one with no _rev filed will be replaced
+        // if there is a document with the same id but has an _rev field, will return en E11000(conflict) error
+        Filters.and(Filters.eq("_id", id), Filters.not(Filters.exists("_rev")))
+      } else {
+        // for old document, we should find a matched document and replace it
+        // if no matched document find and try to insert new document, mongodb will return an E11000 error
+        Filters.and(Filters.eq("_id", id), Filters.eq("_rev", old_rev))
+      }
+
     val f =
       main_collection
-        .findOneAndReplace(Filters.eq("_id", id), Document(asJson.toString), FindOneAndReplaceOptions().upsert(true))
+        .findOneAndReplace(
+          filters,
+          Document(data.toString),
+          FindOneAndReplaceOptions().upsert(true).returnDocument(ReturnDocument.AFTER))
         .toFuture()
         .map { doc =>
           transid.finished(this, start, s"[PUT] '$collection' completed document: '${docinfoStr}', document: '$doc'")
-          DocInfo(DocId(id))
+          DocInfo(DocId(id), DocRevision(rev))
+        }
+        .andThen {
+          case Failure(t: MongoException) =>
+            if (t.getCode == 11000) {
+              transid.finished(this, start, s"[PUT] '$dbName', document: '${docinfoStr}'; conflict.")
+              throw DocumentConflictException("conflict on 'put'")
+            } else {
+              transid.failed(
+                this,
+                start,
+                s"[PUT] '$dbName' failed to put document: '${docinfoStr}'; return error code: '${t.getCode}'",
+                ErrorLevel)
+              throw new Exception("Unexpected mongodb server error: " + t.getMessage)
+            }
         }
 
     reportFailure(
@@ -100,24 +152,49 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
   }
 
   override protected[database] def del(doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] = {
-    require(doc != null, "doc info required for delete")
+    require(doc != null && doc.rev.asString != null, "doc revision required for delete")
 
     val start =
       transid.started(this, LoggingMarkers.DATABASE_DELETE, s"[DEL] '$collection' deleting document: '$doc'")
 
-    val f = main_collection.deleteOne(Filters.eq("_id", doc.id.id)).toFuture().map { result =>
-      if (result.getDeletedCount == 1) {
-        transid.finished(this, start, s"[DEL] '$collection' completed document: '$doc'")
-        true
-      } else if (result.getDeletedCount == 0) {
-        transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; not found.")
-        throw NoDocumentException(s"${doc} not found on 'delete'")
-      } else {
-        //this should not happen as we use the primary key to filter
-        transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; multi documents are deleted.")
-        throw MultiDocumentsMatchedException(s"multi documents: ${doc} are 'delete'")
+    val f = main_collection
+      .deleteOne(Filters.and(Filters.eq("_id", doc.id.id), Filters.eq("_rev", doc.rev.rev)))
+      .toFuture()
+      .map { result =>
+        if (result.getDeletedCount == 1) {
+          transid.finished(this, start, s"[DEL] '$collection' completed document: '$doc'")
+          true
+        } else if (result.getDeletedCount == 0) {
+          main_collection.find(Filters.eq("_id", doc.id.id)).toFuture.onSuccess {
+            case result =>
+              result.headOption
+                .map { _ =>
+                  // find the document according to _id, conflict
+                  transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; conflict.")
+                  throw DocumentConflictException("conflict on 'delete'")
+                }
+                .getOrElse {
+                  // doesn't find the document according to _id, not found
+                  transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; not found.")
+                  throw NoDocumentException(s"${doc} not found on 'delete'")
+                }
+          }
+          false
+        } else {
+          //this should not happen as we use the primary key to filter
+          transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; multi documents are deleted.")
+          throw MultiDocumentsMatchedException(s"multi documents: ${doc} are 'delete'")
+        }
       }
-    }
+      .andThen {
+        case Failure(t: MongoException) =>
+          transid.failed(
+            this,
+            start,
+            s"[DEL] '$dbName' failed to delete document: '${doc}'; error code: '${t.getCode}'",
+            ErrorLevel)
+          throw new Exception("Unexpected mongodb server error: " + t.getMessage)
+      }
 
     reportFailure(
       f,
@@ -136,20 +213,29 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
     require(doc != null, "doc undefined")
 
+    val filters = if (doc.rev.rev != null) {
+      Filters.and(Filters.eq("_id", doc.id.id), Filters.eq("_rev", doc.rev.rev))
+    } else {
+      Filters.eq("_id", doc.id.id)
+    }
+
     val f = main_collection
-      .find(Filters.eq("_id", doc.id.id))
+      .find(filters)
       .toFuture()
       .map(
         result =>
           result.headOption
-            .map(doc => {
+            .map(result => {
               transid.finished(this, start, s"[GET] '$collection' completed: found document '$doc'")
-              docReader.read(ma, doc.toJson(jsonWriteSettings).parseJson).asInstanceOf[A]
+              deserialize[A, DocumentAbstraction](doc, result.toJson(jsonWriteSettings).parseJson.asJsObject)
             })
             .getOrElse {
-              transid.finished(this, start, s"[GET] '$collection' failed to get document: '$doc'")
-              throw NoDocumentException(s"${doc} not found on 'get'")
+              transid.finished(this, start, s"[GET] '$collection', document: '${doc}'; not found.")
+              throw NoDocumentException("not found on 'get'")
           })
+      .recoverWith {
+        case e: DeserializationException => throw DocumentUnreadable(Messages.corruptedEntity)
+      }
 
     reportFailure(
       f,
@@ -378,8 +464,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
   private def reportFailure[T, U](f: Future[T], onFailure: Throwable => U): Future[T] = {
     f.onFailure({
-      case _: ArtifactStoreException => // These failures are intentional and shouldn't trigger the catcher.
-      case x                         => onFailure(x)
+      case _: ArtifactStoreException | _: DuplicateKeyException => // These failures are intentional and shouldn't trigger the catcher.
+      case x                                                    => onFailure(x)
     })
     f
   }
