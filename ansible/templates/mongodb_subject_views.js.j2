@@ -94,7 +94,7 @@ db.createView(
 				"key": "$final.key",
 				"value": "$final.value",
 				"id": "$final._id",
-				"doc": { "$arrayElemAt": ["$final.doc", 0] }
+				"doc": {"$ifNull": [{"$arrayElemAt": ["$doc", 0] }, null]}
 			}
 		}
 	]

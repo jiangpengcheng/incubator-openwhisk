@@ -210,7 +210,7 @@ db:
     version: 3.6.3
     data_volume: "{{ mongodb_data_volume | default('mongo-data') }}"
 
-database_spi: "{% if db.backend == 'MongoDB' %}whisk.core.database.MongoDbStoreProvider{% else %}whisk.core.database.CouchDbStoreProvider{% endif %}"
+database_spi: "{% if db.backend == 'MongoDB' %}whisk.core.database.mongodb.MongoDbStoreProvider{% else %}whisk.core.database.CouchDbStoreProvider{% endif %}"
 mongodb_connect_string: "{% set ret = [] %}\
                          {% for host in groups['db'] %}\
                            {{ ret.append( hostvars[host].ansible_host + ':' + db.mongodb.port) }}\

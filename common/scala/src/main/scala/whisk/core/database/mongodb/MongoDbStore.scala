@@ -31,19 +31,17 @@ import akka.util.ByteString
 import com.mongodb.client.gridfs.model.GridFSUploadOptions
 import org.apache.commons.io.IOUtils
 import org.bson.json.{JsonMode, JsonWriterSettings}
-import org.mongodb.scala.bson.BsonString
+import org.mongodb.scala.bson.{BsonMaxKey, BsonMinKey, BsonNull, BsonString}
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.gridfs.GridFSBucket
 import org.mongodb.scala.model._
-import org.mongodb.scala.{DuplicateKeyException, MongoClient, MongoException}
+import org.mongodb.scala.{MongoClient, MongoException}
 import spray.json._
 import whisk.common.{Logging, LoggingMarkers, TransactionId}
 import whisk.core.database._
 import whisk.core.entity._
 import whisk.core.database.StoreUtils._
 import whisk.http.Messages
-
-import scala.util.{Failure, Success}
 
 case class MongoFile(_id: String, filename: String, metadata: Map[String, String])
 object MongoFile extends DefaultJsonProtocol {
@@ -85,8 +83,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     doc.fields
       .get("_rev")
       .map { value =>
-        val start = value.toString.split("-").apply(0).toInt + 1
-        (value.toString, s"$start-$new_rev")
+        val start = value.convertTo[String].trim.split("-").apply(0).toInt + 1
+        (value.convertTo[String].trim, s"$start-$new_rev")
       }
       .getOrElse {
         ("", s"1-$new_rev")
@@ -129,8 +127,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
           transid.finished(this, start, s"[PUT] '$collection' completed document: '${docinfoStr}', document: '$doc'")
           DocInfo(DocId(id), DocRevision(rev))
         }
-        .andThen {
-          case Failure(t: MongoException) =>
+        .recover {
+          case t: MongoException =>
             if (t.getCode == 11000) {
               transid.finished(this, start, s"[PUT] '$dbName', document: '${docinfoStr}'; conflict.")
               throw DocumentConflictException("conflict on 'put'")
@@ -160,34 +158,26 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     val f = main_collection
       .deleteOne(Filters.and(Filters.eq("_id", doc.id.id), Filters.eq("_rev", doc.rev.rev)))
       .toFuture()
-      .map { result =>
+      .flatMap { result =>
         if (result.getDeletedCount == 1) {
           transid.finished(this, start, s"[DEL] '$collection' completed document: '$doc'")
-          true
-        } else if (result.getDeletedCount == 0) {
-          main_collection.find(Filters.eq("_id", doc.id.id)).toFuture.onSuccess {
-            case result =>
-              result.headOption
-                .map { _ =>
-                  // find the document according to _id, conflict
-                  transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; conflict.")
-                  throw DocumentConflictException("conflict on 'delete'")
-                }
-                .getOrElse {
-                  // doesn't find the document according to _id, not found
-                  transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; not found.")
-                  throw NoDocumentException(s"${doc} not found on 'delete'")
-                }
-          }
-          false
+          Future(true)
         } else {
-          //this should not happen as we use the primary key to filter
-          transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; multi documents are deleted.")
-          throw MultiDocumentsMatchedException(s"multi documents: ${doc} are 'delete'")
+          main_collection.find(Filters.eq("_id", doc.id.id)).toFuture.map { result =>
+            if (result.size == 1) {
+              // find the document according to _id, conflict
+              transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; conflict.")
+              throw DocumentConflictException("conflict on 'delete'")
+            } else {
+              // doesn't find the document according to _id, not found
+              transid.finished(this, start, s"[DEL] '$collection', document: '${doc}'; not found.")
+              throw NoDocumentException(s"${doc} not found on 'delete'")
+            }
+          }
         }
       }
-      .andThen {
-        case Failure(t: MongoException) =>
+      .recover {
+        case t: MongoException =>
           transid.failed(
             this,
             start,
@@ -213,26 +203,18 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
     require(doc != null, "doc undefined")
 
-    val filters = if (doc.rev.rev != null) {
-      Filters.and(Filters.eq("_id", doc.id.id), Filters.eq("_rev", doc.rev.rev))
-    } else {
-      Filters.eq("_id", doc.id.id)
-    }
-
     val f = main_collection
-      .find(filters)
+      .find(Filters.eq("_id", doc.id.id))
       .toFuture()
-      .map(
-        result =>
-          result.headOption
-            .map(result => {
-              transid.finished(this, start, s"[GET] '$collection' completed: found document '$doc'")
-              deserialize[A, DocumentAbstraction](doc, result.toJson(jsonWriteSettings).parseJson.asJsObject)
-            })
-            .getOrElse {
-              transid.finished(this, start, s"[GET] '$collection', document: '${doc}'; not found.")
-              throw NoDocumentException("not found on 'get'")
-          })
+      .map(result =>
+        if (result.size == 0) {
+          transid.finished(this, start, s"[GET] '$collection', document: '${doc}'; not found.")
+          throw NoDocumentException("not found on 'get'")
+        } else {
+          transid.finished(this, start, s"[GET] '$collection' completed: found document '$doc'")
+          deserialize[A, DocumentAbstraction](doc, result.head.toJson(jsonWriteSettings).parseJson.asJsObject)
+
+      })
       .recoverWith {
         case e: DeserializationException => throw DocumentUnreadable(Messages.corruptedEntity)
       }
@@ -274,17 +256,16 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     val sort_fields = 0 to startKey.size map { "key." + _ }
     val sort = if (descending) Sorts.descending(sort_fields: _*) else Sorts.ascending(sort_fields: _*)
 
-    //it's available for the startKey being an empty list, while endKey is not
-    val query =
-      if (endKey.isEmpty) Filters.gte("key", startKey)
-      else Filters.and(Filters.gte("key", startKey), Filters.lte("key", endKey))
+    val begin = if (startKey.nonEmpty) startKey else BsonMinKey()
+    val end = if (endKey.nonEmpty) endKey else BsonMaxKey()
+    val query = Filters.and(Filters.gte("key", begin), Filters.lte("key", end))
 
     val ob =
       if (reduce) {
         query_collection.aggregate(
           List(
             Aggregates.`match`(query),
-            Aggregates.group("", Accumulators.sum("value", "$value")),
+            Aggregates.group(BsonNull(), Accumulators.sum("value", "$value")),
             Aggregates.project(Projections
               .fields(Projections.computed("key", "$_id"), Projections.excludeId(), Projections.include("value"))),
             Aggregates.limit(limit),
@@ -370,7 +351,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
       uploadStream.close().toFuture().map { _ =>
         logging.debug(this, s"upload stream is closed")
       }
-      DocInfo(DocId(uploadStream.id.asString.getValue), DocRevision.empty)
+      // return the old docinfo as put attachment doesn't change anything in the original document
+      doc
     }
 
     reportFailure(
@@ -464,8 +446,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
   private def reportFailure[T, U](f: Future[T], onFailure: Throwable => U): Future[T] = {
     f.onFailure({
-      case _: ArtifactStoreException | _: DuplicateKeyException => // These failures are intentional and shouldn't trigger the catcher.
-      case x                                                    => onFailure(x)
+      case _: ArtifactStoreException => // These failures are intentional and shouldn't trigger the catcher.
+      case x                         => onFailure(x)
     })
     f
   }
