@@ -18,6 +18,7 @@
 #
 
 import abc
+import hashlib
 import json
 import sys
 if sys.version_info.major >= 3:
@@ -26,6 +27,16 @@ else:
     from urllib import quote_plus
 from wskutil import request
 
+DB_PROTOCOL = 'DB_PROTOCOL'
+DB_HOST     = 'DB_HOST'
+DB_PORT     = 'DB_PORT'
+
+DB_CONNECT_STRING = 'DB_CONNECT_STRING'
+DB_REPLICA_SET    = 'DB_REPLICA_SET'
+DB_DATABASE       = 'DB_DATABASE'
+
+DB_USERNAME = 'DB_USERNAME'
+DB_PASSWORD = 'DB_PASSWORD'
 
 class NotSupportedOperation(Exception):
     pass
@@ -63,7 +74,7 @@ class Database(object):
         return
 
 class MongoDB(Database):
-    required_props = ["DB_CONNECT_STRING", "DB_REPLICA_SET", "DB_DATABSE"]
+    required_props = [DB_CONNECT_STRING, DB_REPLICA_SET, DB_DATABASE, DB_USERNAME, DB_PASSWORD]
 
     def __init__(self, props):
         from pymongo import MongoClient
@@ -78,6 +89,14 @@ class MongoDB(Database):
         self.client = MongoClient(uri)
         self.database = self.client[props[DB_DATABASE]]
 
+    # for compatible with couchdb
+    def _calculate_revision(self, doc):
+        md5 = hashlib.md5()
+        md5.update(json.dumps(doc))
+        pre_rev = doc.get("_rev", "0-xxx")
+        next_rev = int(pre_rev.split("-")[0]) + 1
+        return "%d-%s" % (next_rev, md5.hexdigest())
+
     def get(self, table, doc_id, verbose=False):
         coll = self.database[table]
         res = coll.find_one({"_id": doc_id})
@@ -87,6 +106,7 @@ class MongoDB(Database):
 
     def insert(self, table, doc, verbose=False):
         coll = self.database[table]
+        doc['_rev'] = self._calculate_revision(doc)
         coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return Response(201, json.dumps({"response": "201 Created"}))
         
@@ -101,10 +121,7 @@ class MongoDB(Database):
     def list(self, table, view, key, verbose=False):
         coll = self.database["%s.%s" % (table, view)]
         res = coll.aggregate([{"$match": {"key": key}}])
-        nslist = []
-        for row in res:
-            nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key'], "namespace": row['value']['namespace']})
-        return(nslist, Response(200, json.dumps(nslist)))
+        return Response(200, json.dumps(list(res)))
 
     def get_by_view(self, table, view="", include_docs=False, verbose=False):
         res = None
@@ -130,7 +147,7 @@ class MongoDB(Database):
         return 0
 
 class CouchDB(Database):
-    required_props = ["DB_PROTOCOL", "DB_HOST", "DB_PORT"]
+    required_props = [DB_PROTOCOL, DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD]
 
     def __init__(self, props):
         self.auth     = "%s:%s" % (props[DB_USERNAME], props[DB_PASSWORD])
@@ -175,7 +192,7 @@ class CouchDB(Database):
         url = '%(base)s/%(database)s/%(docid)s?rev=%(rev)s' % {
             'base'    : self.base_url,
             'database': table,
-            'docid'   : doc['_id'],
+            'docid'   : quote_plus(doc['_id']),
             'rev'     : doc['_rev']
         }
         res = self._do_request('DELETE', url, verbose=verbose)
@@ -195,19 +212,17 @@ class CouchDB(Database):
             'database': table,
             'design'  : designdoc,
             'view'    : viewname,
-            'key'     : str(key)
+            'key'     : str(key).replace(' ', '').replace("'", '"')
         }
 
         res = self._do_request('GET', url, verbose=verbose)
-        nslist = None
+
+        data = []
         if res.status == 200:
             doc = json.loads(res.read())
-            nslist = []
             if 'rows' in doc and len(doc['rows']) > 0:
-                for row in doc['rows']:
-                    if 'id' in row:
-                        nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key'], "namespace": row['value']['namespace']})
-        return (nslist, Response(res.status, res.read()))
+                data = doc['rows']
+        return Response(res.status, json.dumps(data))
 
     def get_by_view(self, table, view="", include_docs=False, verbose=False):
         if view:

@@ -38,10 +38,6 @@ except ImportError:
     argcomplete = False
 from wskdatabases import AVAILABLE_DATABASE_DRIVERS, CouchDB, MongoDB, init_driver
 
-
-DB_USERNAME = 'DB_USERNAME'
-DB_PASSWORD = 'DB_PASSWORD'
-
 DB_WHISK_AUTHS   = 'DB_WHISK_AUTHS'
 DB_WHISK_ACTIONS = 'DB_WHISK_ACTIONS'
 DB_WHISK_ACTIVATIONS = 'DB_WHISK_ACTIVATIONS'
@@ -57,11 +53,9 @@ DATABASE_DRIVER = None
 
 def main():
     whiskprops = wskprop.importPropsIfAvailable(wskprop.propfile(ROOT_DIR))
-    databaseBackend = whiskprops.get("DB_BACKEND", "couchdb")
+    databaseBackend = whiskprops.get("DB_BACKEND", "couchdb").lower()
     databaseSpecifiedProps = getattr(AVAILABLE_DATABASE_DRIVERS[databaseBackend], "required_props")
-    requiredprops = [
-        DB_USERNAME, DB_PASSWORD, DB_WHISK_AUTHS, DB_WHISK_ACTIONS, DB_WHISK_ACTIVATIONS, LOGS_DIR
-    ] + databaseSpecifiedProps
+    requiredprops = [DB_WHISK_AUTHS, DB_WHISK_ACTIONS, DB_WHISK_ACTIVATIONS, LOGS_DIR] + databaseSpecifiedProps
 
     (valid, props, deferredInfo) = wskprop.checkRequiredProperties(requiredprops, whiskprops)
 
@@ -324,7 +318,15 @@ def getIdentitiesFromNamespace(args, props):
     database = props[DB_WHISK_AUTHS]
     view = "subjects/identities"
 
-    return DATABASE_DRIVER.list(database, view, [args.namespace], args.verbose)
+    res = DATABASE_DRIVER.list(database, view, [args.namespace], args.verbose)
+    nslist = None
+    if res.status == 200:
+        nslist = []
+        doc = json.loads(res.read())
+        for row in doc:
+            if 'id' in row:
+                nslist.append({"subject": row["id"], "uuid": row['value']['uuid'], "key": row['value']['key']})
+    return (nslist, res)
 
 def deleteUserCmd(args, props):
     database = props[DB_WHISK_AUTHS]
@@ -370,14 +372,16 @@ def whoisUserCmd(args, props):
     authParts = args.authkey.split(':')
     view      = "subjects/identities"
 
-    nslist, res = DATABASE_DRIVER.list(database, view, authParts, args.verbose)
+    res = DATABASE_DRIVER.list(database, view, authParts, args.verbose)
 
     if res.status == 200:
-        for ns in nslist:
-            print('subject: %s' % ns['subject'])
-            print('namespace: %s' % ns['namespace'])
-
-        if len(nslist) == 0:
+        doc = json.loads(res.read())
+        for row in doc:
+            if 'id' in row:
+                print('subject: %s' % row['id'])
+                print('namespace: %s' % row['value']['namespace'])
+         
+        if len(doc) == 0:
             print('Subject id is not recognized')
         return 0
     print('Failed to get subject (%s)' % res.read().strip())

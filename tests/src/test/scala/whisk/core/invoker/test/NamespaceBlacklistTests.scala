@@ -23,17 +23,29 @@ import org.junit.runner.RunWith
 import org.scalatest.concurrent.{IntegrationPatience, ScalaFutures}
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{FlatSpec, Matchers}
-import pureconfig.loadConfigOrThrow
 import spray.json.DefaultJsonProtocol._
 import spray.json._
 import whisk.common.TransactionId
-import whisk.core.database.CouchDbConfig
-import whisk.core.ConfigKeys
-import whisk.core.database.test.{DbUtils, ExtendedCouchDbRestClient}
+import whisk.core.database.StaleParameter
+import whisk.core.database.test.DbUtils
 import whisk.core.entity._
+import whisk.core.entity.types.AuthStore
 import whisk.core.invoker.NamespaceBlacklist
 
 import scala.concurrent.duration._
+
+class LimitEntity(name: EntityName, limits: UserLimits) extends WhiskAuth(Subject(), Set.empty) {
+  override def docid = DocId(s"${name.name}/limits")
+
+  //There is no api to write limits. So piggy back on WhiskAuth but replace auth json
+  //with limits!
+  override def toJson = UserLimits.serdes.write(limits).asJsObject
+}
+
+class ExtendedAuth(subject: Subject, namespaces: Set[WhiskNamespace], blocked: Boolean)
+    extends WhiskAuth(subject, namespaces) {
+  override def toJson = JsObject(super.toJson.fields + ("blocked" -> JsBoolean(blocked)))
+}
 
 @RunWith(classOf[JUnitRunner])
 class NamespaceBlacklistTests
@@ -50,39 +62,21 @@ class NamespaceBlacklistTests
   implicit val materializer = ActorMaterializer()
   implicit val tid = TransactionId.testing
 
-  val dbConfig = loadConfigOrThrow[CouchDbConfig](ConfigKeys.couchdb)
   val authStore = WhiskAuthStore.datastore()
-  val subjectsDb = new ExtendedCouchDbRestClient(
-    dbConfig.protocol,
-    dbConfig.host,
-    dbConfig.port,
-    dbConfig.username,
-    dbConfig.password,
-    dbConfig.databaseFor[WhiskAuth])
 
-  /* Identities needed for the first test */
-  val identities = Seq(
-    Identity(Subject(), EntityName("testnamespace1"), AuthKey(), Set.empty, UserLimits(invocationsPerMinute = Some(0))),
-    Identity(
-      Subject(),
-      EntityName("testnamespace2"),
-      AuthKey(),
-      Set.empty,
-      UserLimits(concurrentInvocations = Some(0))),
-    Identity(
-      Subject(),
+  val limits = Seq(
+    new LimitEntity(EntityName("testnamespace1"), UserLimits(invocationsPerMinute = Some(0))),
+    new LimitEntity(EntityName("testnamespace2"), UserLimits(concurrentInvocations = Some(0))),
+    new LimitEntity(
       EntityName("testnamespace3"),
-      AuthKey(),
-      Set.empty,
       UserLimits(invocationsPerMinute = Some(1), concurrentInvocations = Some(1))))
 
-  /* Subject document needed for the second test */
-  val subject = WhiskAuth(
+  val extendAuth = new ExtendedAuth(
     Subject(),
-    Set(WhiskNamespace(EntityName("different1"), AuthKey()), WhiskNamespace(EntityName("different2"), AuthKey())))
-  val blockedSubject = JsObject(subject.toJson.fields + ("blocked" -> true.toJson))
+    Set(WhiskNamespace(EntityName("different1"), AuthKey()), WhiskNamespace(EntityName("different2"), AuthKey())),
+    blocked = true)
 
-  val blockedNamespacesCount = 2 + subject.namespaces.size
+  val blockedNamespacesCount = 2 + extendAuth.namespaces.size
 
   def authToIdentities(auth: WhiskAuth): Set[Identity] = {
     auth.namespaces.map { ns =>
@@ -90,39 +84,20 @@ class NamespaceBlacklistTests
     }
   }
 
-  override protected def withFixture(test: NoArgTest) = {
-    assume(isCouchStore(authStore))
-    super.withFixture(test)
+  def limitToIdentity(limit: LimitEntity): Identity = {
+    val namespace = limit.docid.id.dropRight(7)
+    Identity(limit.subject, EntityName(namespace), AuthKey(), Set(), UserLimits())
   }
 
   override def beforeAll() = {
-    val documents = identities.map { i =>
-      (i.namespace.name + "/limits", i.limits.toJson.asJsObject)
-    } :+ (subject.subject.asString, blockedSubject)
+    limits.foreach(put(authStore, _))
+    put(authStore, extendAuth)
 
-    // Add all documents to the database
-    documents.foreach { case (id, doc) => subjectsDb.putDoc(id, doc).futureValue }
-
-    // Waits for the 2 blocked identities + the namespaces of the blocked subject
-    waitOnView(subjectsDb, NamespaceBlacklist.view.ddoc, NamespaceBlacklist.view.view, blockedNamespacesCount)(
-      executionContext,
-      1.minute)
+    waitOnBlacklistView(authStore, blockedNamespacesCount)
   }
 
   override def afterAll() = {
-    val ids = identities.map(_.namespace.name + "/limits") :+ subject.subject.asString
-
-    // Force remove all documents with those ids by first getting and then deleting the documents
-    ids.foreach { id =>
-      val docE = subjectsDb.getDoc(id).futureValue
-      docE shouldBe 'right
-      val doc = docE.right.get
-      subjectsDb
-        .deleteDoc(doc.fields("_id").convertTo[String], doc.fields("_rev").convertTo[String])
-        .futureValue
-    }
-
-    super.afterAll()
+    cleanup()
   }
 
   it should "mark a namespace as blocked if limit is 0 in database or if one of its subjects is blocked" in {
@@ -130,7 +105,37 @@ class NamespaceBlacklistTests
 
     blacklist.refreshBlacklist().futureValue should have size blockedNamespacesCount
 
-    identities.map(blacklist.isBlacklisted) shouldBe Seq(true, true, false)
-    authToIdentities(subject).toSeq.map(blacklist.isBlacklisted) shouldBe Seq(true, true)
+    limits.map(limitToIdentity).map(blacklist.isBlacklisted) shouldBe Seq(true, true, false)
+    authToIdentities(extendAuth).toSeq.map(blacklist.isBlacklisted) shouldBe Seq(true, true)
   }
+
+  def waitOnBlacklistView(db: AuthStore, count: Int)(implicit timeout: Duration) = {
+    val success = retry(() => {
+      blacklistCount().map { listCount =>
+        if (listCount != count) {
+          throw RetryOp()
+        } else true
+      }
+    }, timeout)
+    assert(success.isSuccess, "wait aborted after: " + timeout + ": " + success)
+  }
+
+  private def blacklistCount() = {
+    //NamespaceBlacklist uses StaleParameter.UpdateAfter which would lead to race condition
+    //So use actual call here
+    authStore
+      .query(
+        table = NamespaceBlacklist.view.name,
+        startKey = List.empty,
+        endKey = List.empty,
+        skip = 0,
+        limit = Int.MaxValue,
+        includeDocs = false,
+        descending = true,
+        reduce = false,
+        stale = StaleParameter.No)
+      .map(_.map(_.fields("key").convertTo[String]).toSet)
+      .map(_.size)
+  }
+
 }
