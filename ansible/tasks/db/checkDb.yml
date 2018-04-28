@@ -30,7 +30,7 @@
 - name: check if {{ dbName }} on MongoDB exists
   vars:
     commands: |
-      db=db.getSiblingDB('{{ db_database }}');
+      db=db.getSiblingDB('{{ mongodb_database }}');
       db.auth('{{ db_username }}', '{{ db_password }}');
       db.getCollectionsInfos({name: '{{ dbName }}' });
   shell: docker exec mongodb mongo {{ mongodb_connect_string }} --quiet --eval "{{ commands }}"

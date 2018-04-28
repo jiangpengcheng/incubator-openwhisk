@@ -29,11 +29,9 @@
     when: not db.stat.exists
 
 - hosts: db
-  roles:
-    - { role: couchdb,
-        when: db.backend == "CouchDB" }
-    - { role: mongodb,
-        when: db.backend == "MongoDB"}
-  post_tasks:
-    - import_tasks: tasks/initMongoDBReplicaSet.yml
-      when: db.backend == "MongoDB" and mode == "deploy"
+  tasks:
+    - import_tasks: couchdb.yml
+      when: db.backend == "CouchDB"
+
+    - import_tasks: mongodb.yml
+      when: db.backend == "MongoDB"

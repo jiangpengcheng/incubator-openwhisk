@@ -14,7 +14,7 @@
 # specific language governing permissions and limitations under the License.
 #
 ---
-# This playbook deploys a CouchDB for Openwhisk.
+# This playbook deploys a MongoDB for Openwhisk.
 
 - hosts: localhost
   tasks:
@@ -30,4 +30,8 @@
 
 - hosts: db
   roles:
-  - couchdb
+    - mongodb
+
+  post_tasks:
+    - import_tasks: tasks/initMongoDBReplicaSet.yml
+      when: mode == "deploy"

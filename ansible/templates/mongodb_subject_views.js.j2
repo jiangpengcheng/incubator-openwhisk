@@ -1,4 +1,4 @@
-db = db.getSiblingDB("{{ db_database }}")
+db = db.getSiblingDB("{{ mongodb_database }}")
 db.auth("{{ db_username }}", "{{ db_password }}")
 
 db["{{ db.whisk.auth }}.namespaceThrottlings/blockedNamespaces"].drop()

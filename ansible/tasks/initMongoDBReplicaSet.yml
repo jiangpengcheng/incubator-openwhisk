@@ -4,7 +4,7 @@
   vars:
     doc: |
       {
-        _id: "{{ db_replicaSet }}",
+        _id: "{{ mongodb_replicaSet }}",
         members: [
           {% for host in groups['db'] %}
             {% if loop.index != 1 %}
@@ -39,14 +39,14 @@
   delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
   run_once: True
 
-- name: add the mongodb user to {{ db_database }}
+- name: add the mongodb user to {{ mongodb_database }}
   vars:
     doc: |
       {
         user: "{{ db_username }}",
         pwd: "{{ db_password }}",
-        roles: [ {role: "readWrite", db: "{{ db_database }}"} ]
+        roles: [ {role: "readWrite", db: "{{ mongodb_database }}"} ]
       }
-  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.auth("{{ db_username }}", "{{ db_password }}"); db=db.getSiblingDB("{{ db_database }}"); db.createUser({{ doc }})'
+  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.auth("{{ db_username }}", "{{ db_password }}"); db=db.getSiblingDB("{{ mongodb_database }}"); db.createUser({{ doc }})'
   delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
   run_once: True
