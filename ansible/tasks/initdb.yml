@@ -17,6 +17,7 @@
     - "{{ openwhisk_home }}/ansible/files/auth_index.json"
     - "{{ openwhisk_home }}/ansible/files/filter_design_document.json"
     - "{{ openwhisk_home }}/ansible/files/namespace_throttlings_design_document_for_subjects_db.json"
+  when: db.backend == "CouchDB"
 
 - name: create necessary "auth" keys
   include_tasks: db/recreateDoc.yml
@@ -34,3 +35,41 @@
         }]
       }
   with_items: "{{ db.authkeys }}"
+  when: db.backend == "CouchDB"
+
+- name: create necessary "auth" keys
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  vars:
+    key: "{{ lookup('file', 'files/auth.{{ item }}') }}"
+    dbName: "{{ db.whisk.auth }}"
+    doc: >
+      {
+        "_id": "{{ item }}",
+        "subject": "{{ item }}",
+        "namespaces": [{
+          "name": "{{ item }}",
+          "uuid": "{{ key.split(":")[0] }}",
+          "key": "{{ key.split(":")[1] }}"
+        }]
+      }
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').save({{ doc }});
+  with_items: "{{ db.authkeys }}"
+  when: db.backend == "MongoDB"
+
+- name: create necessary indexes on {{ db.whisk.auth }}
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  vars:
+    dbName: "{{ db.whisk.auth }}"
+    doc: >
+      [
+        {'namespaces.name': -1},
+        {'namespaces.uuid': -1, 'namespaces.key': -1}
+      ]
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+  when: db.backend == "MongoDB"

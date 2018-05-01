@@ -12,3 +12,16 @@
     user: "{{ db.credentials.admin.user }}"
     password: "{{ db.credentials.admin.pass }}"
     force_basic_auth: yes
+  when: db.backend == "CouchDB"
+
+- name: check if {{ dbName }} on MongoDB exists
+  vars:
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollectionsInfos({name: '{{ dbName }}' });
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --quiet --eval "{{ commands }}"
+  register: filter_result
+  failed_when: filter_result == "[ ]"
+  delegate_to: "{{ groups.db[0] }}"
+  when: db.backend == "MongoDB"

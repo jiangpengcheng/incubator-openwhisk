@@ -2,6 +2,7 @@ whisk.spi {
   SimpleSpi = whisk.spi.SimpleSpiImpl
   MissingSpi = whisk.spi.MissingImpl
   MissingModule = missing.module
+  ArtifactStoreProvider = {{ database_spi }}
 }
 
 # Blocking requests fall back to non-blocking after ~60s
@@ -52,6 +53,19 @@ whisk {
         db       = ${?COSMOSDB_NAME}
     }
 
+    mongodb {
+        hosts       = "{{ mongodb_connect_string }}"
+        replica-set = "{{ mongodb_replicaSet }}"
+        database    = "{{ mongodb_database }}"
+        username    = "{{ db.credentials.admin.user }}"
+        password    = "{{ db.credentials.admin.pass }}"
+        collections {
+          WhiskAuth       = "{{ db.whisk.auth }}"
+          WhiskEntity     = "{{ db.whisk.actions }}"
+          WhiskActivation = "{{ db.whisk.activations }}"
+        }
+    }
+        
     controller {
       protocol = {{ controller.protocol }}
       https {

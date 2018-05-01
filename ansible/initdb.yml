@@ -7,3 +7,4 @@
 - hosts: ansible
   tasks:
   - include_tasks: tasks/initdb.yml
+    run_once: True

@@ -13,6 +13,9 @@ db_password: couch_password
 db_host: "{{ groups['db'] | first }}"
 db_prefix: whisk_distributed_
 
+mongodb_database: whisks
+mongodb_replicaSet: whisk_replica_set
+
 config_root_dir: /tmp/wskconf
 whisk_logs_dir: /tmp/wsklogs
 registry_storage_dir: "/"
