@@ -43,7 +43,7 @@ class NotSupportedOperation(Exception):
 
 
 class Response(object):
-    """unified response of database operation"""    
+    """unified response of database operation"""
     def __init__(self, return_status, data):
         self.status = return_status
         self.data = data
@@ -100,7 +100,7 @@ class MongoDB(Database):
     def get(self, table, doc_id, verbose=False):
         coll = self.database[table]
         res = coll.find_one({"_id": doc_id})
-        compatible_status = 200 if res else 404 
+        compatible_status = 200 if res else 404
         response = res if res else {"error": "not found", "reason": "missing"}
         return (res, Response(compatible_status, json.dumps(response)))
 
@@ -109,7 +109,7 @@ class MongoDB(Database):
         doc['_rev'] = self._calculate_revision(doc)
         coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
         return Response(201, json.dumps({"response": "201 Created"}))
-        
+
     def delete(self, table, doc, verbose=False):
         coll = self.database[table]
         res = coll.delete_one({'_id': doc['_id']})

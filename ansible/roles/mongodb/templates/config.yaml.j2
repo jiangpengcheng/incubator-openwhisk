@@ -1,0 +1,10 @@
+systemLog:
+  verbosity: 4
+  path: "/logs/mongodb.log"
+  destination: file
+security:
+  keyFile: /data/configdb/mongo.key
+replication:
+  replSetName: "{{ mongodb_replicaSet }}"
+net:
+  bindIp: 0.0.0.0

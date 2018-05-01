@@ -1,0 +1,58 @@
+---
+
+- name: delete mongo.key for safety
+  local_action:
+    module: file
+    path:  "{{ playbook_dir }}/mongo.key"
+    state: absent
+
+- name: init replica set
+  vars:
+    doc: |
+      {
+        _id: "{{ mongodb_replicaSet }}",
+        members: [
+          {% for host in groups['db'] %}
+            {% if loop.index != 1 %}
+            , {_id: {{ loop.index-1}}, host: "{{ hostvars[host].ansible_host + ":" + db.mongodb.port }}" }
+            {% else %}
+            {_id: {{ loop.index-1}}, host: "{{ hostvars[host].ansible_host + ":" + db.mongodb.port }}" }
+            {% endif %}
+          {% endfor %}
+        ]
+      }
+  shell: docker exec mongodb mongo --quiet --eval 'rs.initiate({{ doc }})'
+  register: init_result
+  run_once: True
+  failed_when: '"\"ok\" : 1," not in init_result.stdout'
+
+- name: get the primary node index of replica set
+  shell: docker exec mongodb mongo --quiet --eval "rs.status().members.find(r=>r.state===1)._id"
+  register: primary_index
+  retries: 5
+  delay: 2
+  until: primary_index is success
+
+- name: add the root mongodb user
+  vars:
+    doc: |
+      {
+        user: "{{ db_username }}",
+        pwd: "{{ db_password }}",
+        roles: [ {role: "root", db: "admin"} ]
+      }
+  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.createUser({{ doc }})'
+  delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
+  run_once: True
+
+- name: add the mongodb user to {{ mongodb_database }}
+  vars:
+    doc: |
+      {
+        user: "{{ db_username }}",
+        pwd: "{{ db_password }}",
+        roles: [ {role: "readWrite", db: "{{ mongodb_database }}"} ]
+      }
+  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.auth("{{ db_username }}", "{{ db_password }}"); db=db.getSiblingDB("{{ mongodb_database }}"); db.createUser({{ doc }})'
+  delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
+  run_once: True

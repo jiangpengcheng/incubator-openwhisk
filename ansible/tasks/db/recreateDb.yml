@@ -14,6 +14,7 @@
     password: "{{ db_password }}"
     force_basic_auth: yes
   register: response
+  when: db.backend == "CouchDB"
 
 - name: delete the {{ dbName }} with {{ db_provider }}
   uri:
@@ -23,7 +24,7 @@
     user: "{{ db_username }}"
     password: "{{ db_password }}"
     force_basic_auth: yes
-  when: forceRecreation == True and response.status == 200
+  when: db.backend == "CouchDB" and forceRecreation == True and response.status == 200
 
 - name: create {{ dbName }} with {{ db_provider }}
   uri:
@@ -33,4 +34,14 @@
     user: "{{ db_username }}"
     password: "{{ db_password }}"
     force_basic_auth: yes
-  when: forceRecreation == True or response.status == 404
+  when: db.backend == "CouchDB" and (forceRecreation == True or response.status == 404)
+
+- name: recreate {{ dbName }} in MongoDB
+  vars:
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').drop();
+      db.createCollection('{{ dbName }}');
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  when: db.backend == "MongoDB" and forceRecreation == True

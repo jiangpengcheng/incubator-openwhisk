@@ -34,3 +34,5 @@ sealed abstract class ArtifactStoreRuntimeException(message: String) extends Run
 case class UnsupportedQueryKeys(message: String) extends ArtifactStoreRuntimeException(message)
 
 case class UnsupportedView(message: String) extends ArtifactStoreRuntimeException(message)
+
+case class MultiDocumentsMatchedException(message: String) extends ArtifactStoreException(message)

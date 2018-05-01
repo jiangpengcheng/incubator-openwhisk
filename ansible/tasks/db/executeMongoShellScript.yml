@@ -1,0 +1,16 @@
+---
+# execute a mongodb shell script
+# scriptFile - the file name of mongodb shell script
+
+- name: create MongoDB views shell scripts
+  template:
+    src: "{{ scriptFile }}.j2"
+    dest: "{{ db.confdir }}/{{ scriptFile }}"
+
+- name: create MongoDB views
+  shell: "docker exec mongodb mongo {{ mongodb_connect_string }} /data/configdb/{{ scriptFile }}"
+
+- name: delete MongoDB views shell scripts
+  file:
+    path: "{{ db.confdir }}/{{ scriptFile }}"
+    state: absent

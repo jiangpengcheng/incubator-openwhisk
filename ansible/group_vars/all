@@ -202,6 +202,8 @@ nginx:
 # The key db.whisk.auth is the name of the authentication database where all keys of all users are stored.
 # The db_prefix is defined for each environment on its own. The CouchDb credentials are also defined for each environment on its own.
 db:
+  backend: "{{ database_backend | default('CouchDB') }}"
+  confdir: "{{ config_root_dir }}/database"
   instances: "{{ groups['db'] | length }}"
   authkeys:
   - guest
@@ -210,6 +212,17 @@ db:
     actions: "{{ db_prefix }}whisks"
     activations: "{{ db_prefix }}activations"
     auth: "{{ db_prefix }}subjects"
+  mongodb:
+    port: "{{ mongodb_port | default('27017') }}"
+    version: 3.6.3
+    data_volume: "{{ mongodb_data_volume | default('mongo-data') }}"
+
+database_spi: "{% if db.backend == 'MongoDB' %}whisk.core.database.mongodb.MongoDbStoreProvider{% else %}whisk.core.database.CouchDbStoreProvider{% endif %}"
+mongodb_connect_string: "{% set ret = [] %}\
+                         {% for host in groups['db'] %}\
+                           {{ ret.append( hostvars[host].ansible_host + ':' + db.mongodb.port) }}\
+                         {% endfor %}\
+                         {{ ret | join(',') }}"
 
 apigateway:
   port:

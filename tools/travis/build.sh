@@ -63,6 +63,12 @@ cd $ROOTDIR/ansible
 $ANSIBLE_CMD wipe.yml
 $ANSIBLE_CMD openwhisk.yml
 
+# deploy mongodb
+$ANSIBLE_CMD mongodb.yml
+$ANSIBLE_CMD initdb.yml -e database_backend=MongoDB
+$ANSIBLE_CMD wipe.yml -e database_backend=MongoDB
+
+
 cd $ROOTDIR
 cat whisk.properties
 TERM=dumb ./gradlew :tests:testCoverageLean :tests:reportCoverage
