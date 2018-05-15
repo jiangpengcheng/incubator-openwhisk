@@ -589,7 +589,7 @@ case class ShardingContainerPoolBalancerState(
       _clusterSize = actualSize
       val newTreshold = (totalInvokerThreshold / actualSize) max 1 // letting this fall below 1 doesn't make sense
       currentInvokerThreshold = newTreshold
-      _invokerSlots = _invokerSlots.map(_ => new ForcibleSemaphore(currentInvokerThreshold))
+      _invokerSlots.foreach(_.setMaxPermits(currentInvokerThreshold))
 
       logging.info(
         this,

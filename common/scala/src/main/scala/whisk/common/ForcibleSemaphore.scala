@@ -82,6 +82,18 @@ class ForcibleSemaphore(maxAllowed: Int) {
         forceAquireShared(acquires)
       }
     }
+
+    /**
+     * Reduce the permits, roughly the same as `java.util.concurrent.Semaphore.Sync#reducePermits`
+     */
+    @tailrec
+    final def reducePermits(reductions: Int): Unit = {
+      val available = getState
+      val newState = available - reductions
+      if (!compareAndSetState(available, newState)) {
+        reducePermits(reductions)
+      }
+    }
   }
 
   val sync = new Sync
@@ -121,4 +133,16 @@ class ForcibleSemaphore(maxAllowed: Int) {
 
   /** Returns the number of currently available permits. Possibly negative. */
   def availablePermits: Int = sync.permits
+
+  /** Set the max permits for sync. */
+  def setMaxPermits(newMaxAllowed: Int): Unit = {
+    require(newMaxAllowed > 0, "maxAllowed cannot be negative")
+    newMaxAllowed - maxAllowed match {
+      case 0 =>
+      case delta if delta > 0 =>
+        sync.releaseShared(delta) // increase the max permits
+      case delta if delta < 0 =>
+        sync.reducePermits(-delta) // reduce the max permits
+    }
+  }
 }
