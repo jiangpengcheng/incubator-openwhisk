@@ -26,7 +26,7 @@ import spray.json.RootJsonFormat
 import whisk.common.Logging
 import whisk.core.ConfigKeys
 import whisk.core.database._
-import whisk.core.entity.DocumentReader
+import whisk.core.entity.{DocumentReader, WhiskActivation, WhiskAuth, WhiskEntity}
 import pureconfig._
 
 import scala.reflect.ClassTag
@@ -73,6 +73,7 @@ object MongoDbClient {
 }
 
 object MongoDbStoreProvider extends ArtifactStoreProvider {
+  private val dbConfig = loadConfigOrThrow[MongoDbConfig](ConfigKeys.mongodb)
 
   def makeStore[D <: DocumentSerializer: ClassTag](useBatching: Boolean)(
     implicit jsonFormat: RootJsonFormat[D],
@@ -80,9 +81,30 @@ object MongoDbStoreProvider extends ArtifactStoreProvider {
     actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): ArtifactStore[D] = {
-    val dbConfig = loadConfigOrThrow[MongoDbConfig](ConfigKeys.mongodb)
-    MongoDbClient.setup(dbConfig)
 
-    new MongoDbStore[D](MongoDbClient.client, dbConfig.database, dbConfig.collectionFor[D], useBatching)
+    MongoDbClient.setup(dbConfig)
+    val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]], MongoDbClient.client)
+    new MongoDbStore[D](
+      MongoDbClient.client,
+      dbConfig.database,
+      dbConfig.collectionFor[D],
+      handler,
+      mapper,
+      useBatching)
+  }
+
+  private def handlerAndMapper[D](entityType: ClassTag[D], client: MongoClient)(
+    implicit actorSystem: ActorSystem,
+    logging: Logging,
+    materializer: ActorMaterializer): (DocumentHandler, MongoViewMapper) = {
+    val db = client.getDatabase(dbConfig.database)
+    entityType.runtimeClass match {
+      case x if x == classOf[WhiskEntity] =>
+        (WhisksHandler, WhisksViewMapper)
+      case x if x == classOf[WhiskActivation] =>
+        (ActivationHandler, ActivationViewMapper)
+      case x if x == classOf[WhiskAuth] =>
+        (SubjectHandler, SubjectViewMapper)
+    }
   }
 }

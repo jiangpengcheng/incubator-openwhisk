@@ -37,11 +37,6 @@
   with_items: "{{ db.authkeys }}"
   when: db.backend == "CouchDB"
 
-- include_tasks: db/executeMongoShellScript.yml
-  vars:
-    scriptFile: "mongodb_subject_views.js"
-  when: db.backend == "MongoDB"
-
 - name: create necessary "auth" keys
   shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
   vars:

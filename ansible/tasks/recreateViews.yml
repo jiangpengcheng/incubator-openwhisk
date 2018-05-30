@@ -23,11 +23,3 @@
     - "{{ openwhisk_home }}/ansible/files/activations_design_document_for_activations_db.json"
     - "{{ openwhisk_home }}/ansible/files/logCleanup_design_document_for_activations_db.json"
   when: db.backend == "CouchDB" and db.whisk.activations != db.whisk.actions
-
-- include_tasks: db/executeMongoShellScript.yml
-  vars:
-    scriptFile: "{{ item }}"
-  with_items:
-    - "mongodb_action_views.js"
-    - "mongodb_activation_views.js"
-  when: db.backend == "MongoDB"
