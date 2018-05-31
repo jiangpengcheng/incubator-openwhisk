@@ -23,3 +23,34 @@
     - "{{ openwhisk_home }}/ansible/files/activations_design_document_for_activations_db.json"
     - "{{ openwhisk_home }}/ansible/files/logCleanup_design_document_for_activations_db.json"
   when: db.backend == "CouchDB" and db.whisk.activations != db.whisk.actions
+
+- name: create necessary indexes on {{ db.whisk.actions }}
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  vars:
+    dbName: "{{ db.whisk.actions }}"
+    doc: >
+      [
+        {"namespace": -1, "updated": -1},
+        {"_computed.rootns": -1, "updated": -1}
+      ]
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+  when: db.backend == "MongoDB"
+
+- name: create necessary indexes on {{ db.whisk.activations }}
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  vars:
+    dbName: "{{ db.whisk.activations }}"
+    doc: >
+      [
+        {"namespace": -1, "start": -1},
+        {"_computed.nspath": -1, "start": -1},
+        {"start": -1}
+      ]
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+  when: db.backend == "MongoDB"

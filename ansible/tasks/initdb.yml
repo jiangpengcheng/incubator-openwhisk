@@ -58,3 +58,18 @@
       db.getCollection('{{ dbName }}').insertOne({{ doc }});
   with_items: "{{ db.authkeys }}"
   when: db.backend == "MongoDB"
+
+- name: create necessary indexes on {{ db.whisk.auth }}
+  shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"
+  vars:
+    dbName: "{{ db.whisk.auth }}"
+    doc: >
+      [
+        {"namespaces.name": -1},
+        {"namespaces.uuid": -1, "namespaces.key": -1}
+      ]
+    commands: |
+      db=db.getSiblingDB('{{ mongodb_database }}');
+      db.auth('{{ db_username }}', '{{ db_password }}');
+      db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+  when: db.backend == "MongoDB"

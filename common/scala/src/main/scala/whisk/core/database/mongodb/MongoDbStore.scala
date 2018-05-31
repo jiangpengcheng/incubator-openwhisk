@@ -46,12 +46,12 @@ object MongoDbStore {
   implicit class StringPurge(val s: String) {
     def escapeDollar = {
       // replace '"$xxx":' to '"_mark_of_dollar_xxx":' as the "$" can not be the first char of field name
-      s.replaceAll("\"\\$(.*?)\":", "\"_mark_of_dollar_$1\":")
+      s.replaceAll("\"\\$([^}]+?\":)", "\"_mark_of_dollar_$1")
     }
 
     def recoverDollar = {
       // restore the "$" from "_mark_of_dollar_"
-      s.replaceAll("\"_mark_of_dollar_(.*?)\":", "\"\\$$1\":")
+      s.replaceAll("\"_mark_of_dollar_([^}]+?\":)", "\"\\$$1")
     }
   }
 }
