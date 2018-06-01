@@ -17,7 +17,6 @@
 
 package whisk.core.database.mongodb
 
-import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.bson.conversions.Bson
 import org.mongodb.scala.model.Filters._
 import org.mongodb.scala.model.Sorts
@@ -155,23 +154,54 @@ private object WhisksViewMapper extends MongoViewMapper {
 }
 private object SubjectViewMapper extends MongoViewMapper {
 
+  private val BLOCKED = "blocked"
+  private val SUBJECT = "subject"
+  private val UUID = "uuid"
+  private val KEY = "key"
+  private val NS_NAME = "namespaces.name"
+  private val NS_UUID = "namespaces.uuid"
+  private val NS_KEY = "namespaces.key"
+  private val CONCURRENT_INVOCATIONS = "concurrentInvocations"
+  private val INVOCATIONS_PERMINUTE = "invocationsPerminute"
+
   override def filter(ddoc: String, view: String, startKey: List[Any], endKey: List[Any]): Bson = {
-    checkSupportedView(ddoc, view)
     require(startKey == endKey, s"startKey: $startKey and endKey: $endKey must be same for $ddoc/$view")
-    // the SubjectHandler will filter results
-    Document.empty
-  }
-
-  override def sort(ddoc: String, view: String, descending: Boolean): Option[Bson] = {
-    checkSupportedView(ddoc, view)
-    None
-  }
-
-  def checkSupportedView(ddoc: String, view: String): Unit = {
     (ddoc, view) match {
-      case ("subjects", "identities") | ("namespaceThrottlings", "blockedNamespaces") =>
+      case ("subjects", "identities") =>
+        filterForMatchingSubjectOrNamespace(ddoc, view, startKey, endKey)
+      case ("namespaceThrottlings", "blockedNamespaces") =>
+        or(equal(BLOCKED, true), equal(CONCURRENT_INVOCATIONS, 0), equal(INVOCATIONS_PERMINUTE, 0))
       case _ =>
         throw UnsupportedView(s"$ddoc/$view")
     }
   }
+
+  override def sort(ddoc: String, view: String, descending: Boolean): Option[Bson] = {
+    (ddoc, view) match {
+      case ("subjects", "identities") | ("namespaceThrottlings", "blockedNamespaces") => None
+      case _ =>
+        throw UnsupportedView(s"$ddoc/$view")
+    }
+  }
+
+  private def filterForMatchingSubjectOrNamespace(ddoc: String,
+                                                  view: String,
+                                                  startKey: List[Any],
+                                                  endKey: List[Any]): Bson = {
+    val notBlocked = notEqual(BLOCKED, true)
+    startKey match {
+      case ns :: Nil          => and(notBlocked, or(equal(SUBJECT, ns), equal(NS_NAME, ns)))
+      case uuid :: key :: Nil =>
+        // @formatter:off
+        and(
+          notBlocked,
+          or(
+            and(equal(UUID, uuid), equal(KEY, key)),
+            and(equal(NS_UUID, uuid), equal(NS_KEY, key))
+          ))
+      // @formatter:on
+      case _ => throw UnsupportedQueryKeys(s"$ddoc/$view -> ($startKey, $endKey)")
+    }
+  }
+
 }
