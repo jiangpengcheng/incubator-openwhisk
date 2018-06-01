@@ -42,6 +42,10 @@ class NotSupportedOperation(Exception):
     pass
 
 
+class UnsupportedQueryKeys(Exception):
+    pass
+
+
 class Response(object):
     """unified response of database operation"""
     def __init__(self, return_status, data):
@@ -70,9 +74,76 @@ class Database(object):
         return
 
     @abc.abstractmethod
-    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+    def get_by_view(self, table, view=None, include_docs=False, verbose=False):
         return
 
+class SubjectView(object):
+    def __init__(self, namespace, uuid, key):
+        self.namespace = namespace
+        self.uuid = uuid
+        self.key = key
+
+
+class SubjectViewHelper(object):
+    def _transform_subjects_identities_view(self, key, result):
+        _filter = None
+        if len(key) == 1:
+           _filter = lambda s: s.namespace == key[0]
+        elif len(key) == 2:
+           _filter = lambda s: s.uuid == key[0] and s.key == key[1]
+
+        subjects = []
+        for r in result:
+            temp = []
+            if all([i in r for i in['subject', 'uuid', 'key']]):
+                temp = [SubjectView(r['subject'], r['uuid'], r['key'])]
+            elif r.has_key('namespaces'):
+                temp = [SubjectView(ns['name'], ns['uuid'], ns['key']) for ns in r['namespaces']]
+
+            subjects.extend(
+                map(lambda s: {
+                    'id': r['_id'],
+                    'key': key,
+                    'value': {
+                        '_id': '%s/limits' % s.namespace,
+                        'namespace': s.namespace,
+                        'uuid': s.uuid,
+                        'key': s.key
+                    }}, filter(_filter, temp))
+            )
+
+        return subjects
+
+    def _filter_for_subjects_identities(self, key):
+        if len(key) == 1:
+            return {"$and": [
+                {"blocked": {"$ne": True}},
+                {"$or": [{"subject": key[0]}, {"namespaces.name": key[0]}]}
+            ]}
+        elif len(key) == 2:
+            return {"$and": [
+                {"blocked": {"$ne": True}},
+                {"$or": [
+                    {"uuid": key[0], "key": key[1]},
+                    {"namespaces.uuid": key[0], "namespaces.key": key[1]}
+                ]}
+            ]}
+        else:
+            raise UnsupportedQueryKeys("%s on %s" % (key, view))
+
+    def transform_view_result(self, view, key, result):
+        if view == 'subjects/identities':
+            return self._transform_subjects_identities_view(key, result)
+        else:
+            raise NotSupportedOperation("this MongoDB driver doesn't support view %s yet" % view)
+
+    def transform_filter(self, view, key):
+        if view == "subjects/identities":
+            return self._filter_for_subjects_identities(key)
+        else:
+            raise NotSupportedOperation("this MongoDB driver doesn't support view %s yet" % view)
+
+            
 class MongoDB(Database):
     required_props = [DB_CONNECT_STRING, DB_REPLICA_SET, DB_DATABASE, DB_USERNAME, DB_PASSWORD]
 
@@ -88,6 +159,9 @@ class MongoDB(Database):
 
         self.client = MongoClient(uri)
         self.database = self.client[props[DB_DATABASE]]
+        self.view_helpers = {
+            props['DB_WHISK_AUTHS']: SubjectViewHelper()
+        }
 
     # for compatible with couchdb
     def _calculate_revision(self, doc):
@@ -119,29 +193,30 @@ class MongoDB(Database):
             return Response(404, json.dumps({"response": "Document: %s not found" % doc['_id']}))
 
     def list(self, table, view, key, verbose=False):
-        coll = self.database["%s.%s" % (table, view)]
-        res = coll.aggregate([{"$match": {"key": key}}])
-        return Response(200, json.dumps(list(res)))
+        coll = self.database[table]
+        view_helper = self.view_helpers.get(table)
+        if not view_helper:
+            raise NotSupportedOperation("this MongoDB driver doesn't support view %s yet" % view)
 
-    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+        filters = view_helper.transform_filter(view, key)
+        res = view_helper.transform_view_result(view, key, coll.find(filters))
+        return Response(200, json.dumps(res))
+
+    def get_by_view(self, table, view=None, include_docs=False, verbose=False):
         res = None
-        if view == "":
+        if view == None:
             coll = self.database[table]
             if include_docs:
                 res = coll.aggregate(
                     [
                         {"$lookup": {"from": table, "localField": "_id", "foreignField": "_id", "as": "doc"}},
-                        {"$project": {"key": "_id", "id": "_id", "_id": 0, "doc": {"$arrayElemAt": ["$doc", 0]}}}
+                        {"$project": {"key": "$_id", "id": "$_id", "_id": 0, "doc": {"$arrayElemAt": ["$doc", 0]}}}
                     ]
                 )
             else:
-                res = coll.aggregate([{"$project": {"key": "_id", "id": "_id", "_id": 0}}])
+                res = coll.aggregate([{"$project": {"key": "$_id", "id": "$_id", "_id": 0}}])
         else:
-            coll = self.database["%s.%s" % (table, view)]
-            if include_docs:
-                res = coll.find()
-            else:
-                res = coll.aggregate({"$project": {"doc": 0}})
+            raise NotSupportedOperation("this MongoDB driver doesn't support to get view")
 
         print(json.dumps(list(res), sort_keys=True, indent=4, separators=(',', ': ')))
         return 0
@@ -224,7 +299,7 @@ class CouchDB(Database):
                 data = doc['rows']
         return Response(res.status, json.dumps(data))
 
-    def get_by_view(self, table, view="", include_docs=False, verbose=False):
+    def get_by_view(self, table, view=None, include_docs=False, verbose=False):
         if view:
             try:
                 parts = view.split('/')
