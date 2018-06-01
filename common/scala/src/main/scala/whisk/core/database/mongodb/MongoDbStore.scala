@@ -18,6 +18,7 @@
 package whisk.core.database.mongodb
 
 import java.security.MessageDigest
+import java.util.NoSuchElementException
 
 import scala.concurrent.Future
 import akka.actor.ActorSystem
@@ -85,6 +86,7 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
 
   protected[core] implicit val executionContext = system.dispatcher
 
+  private val attachmentScheme = "mongo"
   private val database = client.getDatabase(dbName)
   private val main_collection = database.getCollection(collection)
   private val gridFSBucket = GridFSBucket(database, collection)
@@ -213,15 +215,17 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     val f = main_collection
       .find(filters)
       .toFuture()
-      .map(result =>
+      .flatMap(result =>
         if (result.size == 0) {
           transid.finished(this, start, s"[GET] '$collection', document: '$doc'; not found.")
           throw NoDocumentException("not found on 'get'")
         } else {
           transid.finished(this, start, s"[GET] '$collection' completed: found document '$doc'")
-          deserialize[A, DocumentAbstraction](
-            doc,
-            result.head.toJson(jsonWriteSettings).recoverDollar.parseJson.asJsObject)
+          val response = result.head.toJson(jsonWriteSettings).recoverDollar.parseJson.asJsObject
+          val deserializedDoc = deserialize[A, DocumentAbstraction](doc, response)
+          attachmentHandler
+            .map(processAttachments(deserializedDoc, response, doc.id.id, _))
+            .getOrElse(Future.successful(deserializedDoc))
       })
       .recoverWith {
         case t: MongoException =>
@@ -366,12 +370,13 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     docStream: Source[ByteString, _],
     oldAttachment: Option[Attached])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
 
-    val attached = Attached(UUID().toString(), contentType)
+    val attachmentUri = Uri.from(scheme = attachmentScheme, path = UUID().asString)
+    val attached = Attached(attachmentUri.toString(), contentType)
     val updatedDoc = update(d, attached)
 
     for {
       i1 <- put(updatedDoc)
-      i2 <- attach(i1, attached.attachmentName, attached.attachmentType, docStream)
+      i2 <- attach(i1, attachmentUri.path.toString(), attached.attachmentType, docStream)
     } yield (i2, attached)
   }
 
@@ -553,6 +558,40 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     ContentType.parse(typeString) match {
       case Right(ct) => ct
       case Left(_)   => ContentTypes.`text/plain(UTF-8)` //Should not happen
+    }
+  }
+
+  private def processAttachments[A <: DocumentAbstraction](doc: A,
+                                                           js: JsObject,
+                                                           docId: String,
+                                                           attachmentHandler: (A, Attached) => A): Future[A] = {
+    try {
+      val name = js.fields("exec").asJsObject().fields("code").asJsObject().fields("attachmentName").convertTo[String]
+      gridFSBucket
+        .find(Filters.eq("_id", s"$docId/$name"))
+        .toFuture
+        .map { results =>
+          results.headOption
+            .map { file =>
+              val attached =
+                Attached(file.getFilename, getContentType(file), Some(file.getLength.toInt), Some(file.getMD5))
+              attachmentHandler(doc, attached)
+            }
+            .getOrElse {
+              throw NoDocumentException(s"Not found attachment for doc: $docId")
+            }
+        }
+    } catch {
+      case e: DeserializationException =>
+        logging.info(this, s"Failed to get attachment name from doc $docId, error is: ${e.getMessage}")
+        Future.successful(doc)
+      case _: NoSuchElementException =>
+        logging.error(
+          this,
+          s"Content of action $docId seems malformed, doesn't contain embedded field 'exec.code.attachmentName'")
+        Future.successful(doc)
+      case e: Throwable =>
+        throw e
     }
   }
 }
