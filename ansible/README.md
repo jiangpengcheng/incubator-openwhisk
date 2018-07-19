@@ -103,7 +103,7 @@ or
 [db_creds]
 db_username=
 db_password=
-mongodb_replicaSet=
+mongodb_replica_set=
 mongodb_database=
 ```
 if you want to use MongoDB.

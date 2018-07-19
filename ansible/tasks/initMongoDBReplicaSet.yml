@@ -13,7 +13,7 @@
   vars:
     doc: |
       {
-        _id: "{{ mongodb_replicaSet }}",
+        _id: "{{ mongodb_replica_set }}",
         members: [
           {% for host in groups['db'] %}
             {% if loop.index != 1 %}
