@@ -13,7 +13,7 @@
   vars:
     doc: |
       {
-        _id: "{{ mongodb_replica_set }}",
+        _id: "{{ db.mongodb.replica_set }}",
         members: [
           {% for host in groups['db'] %}
             {% if loop.index != 1 %}
@@ -40,22 +40,22 @@
   vars:
     doc: |
       {
-        user: "{{ db_username }}",
-        pwd: "{{ db_password }}",
+        user: "{{ db.credentials.admin.user }}",
+        pwd: "{{ db.credentials.admin.pass }}",
         roles: [ {role: "root", db: "admin"} ]
       }
   shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.createUser({{ doc }})'
   delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
   run_once: True
 
-- name: add the mongodb user to {{ mongodb_database }}
+- name: add the mongodb user to {{ db.mongodb.database }}
   vars:
     doc: |
       {
-        user: "{{ db_username }}",
-        pwd: "{{ db_password }}",
-        roles: [ {role: "readWrite", db: "{{ mongodb_database }}"} ]
+        user: "{{ db.credentials.admin.user }}",
+        pwd: "{{ db.credentials.admin.pass }}",
+        roles: [ {role: "readWrite", db: "{{ db.mongodb.database }}"} ]
       }
-  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.auth("{{ db_username }}", "{{ db_password }}"); db=db.getSiblingDB("{{ mongodb_database }}"); db.createUser({{ doc }})'
+  shell: docker exec mongodb mongo --eval 'admin=db.getSiblingDB("admin"); admin.auth("{{ db.credentials.admin.user }}", "{{ db.credentials.admin.pass }}"); db=db.getSiblingDB("{{ db.mongodb.database }}"); db.createUser({{ doc }})'
   delegate_to: "{{groups.db[ primary_index.stdout|int ]}}"
   run_once: True

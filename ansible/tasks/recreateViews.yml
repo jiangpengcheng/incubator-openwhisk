@@ -34,8 +34,8 @@
         {'_computed.rootns': -1, 'updated': -1}
       ]
     commands: |
-      db=db.getSiblingDB('{{ mongodb_database }}');
-      db.auth('{{ db_username }}', '{{ db_password }}');
+      db=db.getSiblingDB('{{ db.mongodb.database }}');
+      db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
       db.getCollection('{{ dbName }}').createIndexes({{ doc }});
   when: db.backend == "MongoDB"
 
@@ -50,7 +50,7 @@
         {'start': -1}
       ]
     commands: |
-      db=db.getSiblingDB('{{ mongodb_database }}');
-      db.auth('{{ db_username }}', '{{ db_password }}');
+      db=db.getSiblingDB('{{ db.mongodb.database }}');
+      db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
       db.getCollection('{{ dbName }}').createIndexes({{ doc }});
   when: db.backend == "MongoDB"

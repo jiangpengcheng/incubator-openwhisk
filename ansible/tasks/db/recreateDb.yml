@@ -39,8 +39,8 @@
 - name: recreate {{ dbName }} in MongoDB
   vars:
     commands: |
-      db=db.getSiblingDB('{{ mongodb_database }}');
-      db.auth('{{ db_username }}', '{{ db_password }}');
+      db=db.getSiblingDB('{{ db.mongodb.database }}');
+      db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
       db.getCollection('{{ dbName }}').drop();
       db.createCollection('{{ dbName }}');
   shell: docker exec mongodb mongo {{ mongodb_connect_string }} --eval "{{ commands }}"

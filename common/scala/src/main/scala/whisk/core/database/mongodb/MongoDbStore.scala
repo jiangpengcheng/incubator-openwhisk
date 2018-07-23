@@ -32,12 +32,13 @@ import org.mongodb.scala.bson.BsonString
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.gridfs.{GridFSBucket, GridFSFile, MongoGridFSException}
 import org.mongodb.scala.model._
-import org.mongodb.scala.{MongoClient, MongoException}
+import org.mongodb.scala.MongoException
 import spray.json._
 import whisk.common.{Logging, LoggingMarkers, TransactionId}
 import whisk.core.database._
 import whisk.core.entity._
 import whisk.core.database.StoreUtils._
+import whisk.core.database.mongodb.MongoDbStoreProvider.DocumentClientRef
 import whisk.core.entity.Attachments.Attached
 import whisk.http.Messages
 
@@ -62,33 +63,38 @@ object MongoDbStore {
 /**
  * Basic client to put and delete artifacts in a data store.
  *
- * @param client the mongodb client to access database
+ * @param clientRef the mongodb client reference to access database
  * @param dbName the name of the database to operate on
  * @param collection the name of the collection to operate on
  * @param documentHandler helper class help to simulate the designDoc of CouchDB
  * @param viewMapper helper class help to simulate the designDoc of CouchDB
- * @param useBatching whether use batch update/insert(not supported yet)
  */
-class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClient,
+class MongoDbStore[DocumentAbstraction <: DocumentSerializer](clientRef: DocumentClientRef,
                                                               dbName: String,
                                                               collection: String,
                                                               documentHandler: DocumentHandler,
                                                               viewMapper: MongoViewMapper,
-                                                              useBatching: Boolean = false)(
+                                                              val inliningConfig: InliningConfig,
+                                                              val attachmentStore: Option[AttachmentStore])(
   implicit system: ActorSystem,
   val logging: Logging,
   jsonFormat: RootJsonFormat[DocumentAbstraction],
-  materializer: ActorMaterializer,
+  val materializer: ActorMaterializer,
   docReader: DocumentReader)
     extends ArtifactStore[DocumentAbstraction]
     with DocumentProvider
-    with DefaultJsonProtocol {
+    with DefaultJsonProtocol
+    with AttachmentSupport[DocumentAbstraction] {
 
   import whisk.core.database.mongodb.MongoDbStore._
 
   protected[core] implicit val executionContext = system.dispatcher
 
-  private val attachmentScheme = "mongo"
+  private val mongodbScheme = "mongodb"
+  val attachmentScheme: String = attachmentStore.map(_.scheme).getOrElse(mongodbScheme)
+
+  private val client = clientRef.get.client
+
   private val database = client.getDatabase(dbName)
   private val main_collection = database.getCollection(collection)
   private val gridFSBucket = GridFSBucket(database, collection)
@@ -96,7 +102,6 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
   private val jsonWriteSettings = JsonWriterSettings.builder().outputMode(JsonMode.RELAXED).build
 
   override protected[database] def put(d: DocumentAbstraction)(implicit transid: TransactionId): Future[DocInfo] = {
-    //TODO: support bulk put
     val asJson = d.toDocumentRecord
 
     val id: String = asJson.fields("_id").convertTo[String].trim
@@ -284,8 +289,6 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
                                      descending: Boolean,
                                      reduce: Boolean,
                                      stale: StaleParameter)(implicit transid: TransactionId): Future[List[JsObject]] = {
-    //FIXME: staleParameter is meaningless in mongodb
-
     require(!(reduce && includeDocs), "reduce and includeDocs cannot both be true")
     require(!reduce, "Reduce scenario not supported") //TODO Investigate reduce
     require(skip >= 0, "skip should be non negative")
@@ -366,15 +369,30 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
   }
 
   override protected[database] def putAndAttach[A <: DocumentAbstraction](
-    d: A,
+    doc: A,
     update: (A, Attached) => A,
     contentType: ContentType,
     docStream: Source[ByteString, _],
     oldAttachment: Option[Attached])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
 
+    attachmentStore match {
+      case Some(as) =>
+        attachToExternalStore(doc, update, contentType, docStream, oldAttachment, as)
+      case None =>
+        attachToMongo(doc, update, contentType, docStream)
+    }
+
+  }
+
+  private def attachToMongo[A <: DocumentAbstraction](
+    doc: A,
+    update: (A, Attached) => A,
+    contentType: ContentType,
+    docStream: Source[ByteString, _])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
+
     val attachmentUri = Uri.from(scheme = attachmentScheme, path = UUID().asString)
     val attached = Attached(attachmentUri.toString(), contentType)
-    val updatedDoc = update(d, attached)
+    val updatedDoc = update(doc, attached)
 
     for {
       i1 <- put(updatedDoc)
@@ -428,14 +446,34 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
           ErrorLevel))
   }
 
-  override protected[core] def readAttachment[T](doc: DocInfo, name: String, sink: Sink[ByteString, Future[T]])(
-    implicit transid: TransactionId): Future[(ContentType, T)] = {
+  override protected[core] def readAttachment[T](doc: DocInfo, attached: Attached, sink: Sink[ByteString, Future[T]])(
+    implicit transid: TransactionId): Future[T] = {
 
-    val attachmentName = Uri(name).path.toString
+    val name = attached.attachmentName
+    val attachmentUri = Uri(name)
+
+    attachmentUri.scheme match {
+      case AttachmentSupport.MemScheme =>
+        memorySource(attachmentUri).runWith(sink)
+      case s if s == mongodbScheme || attachmentUri.isRelative =>
+        //relative case is for compatibility with earlier naming approach where attachment name would be like 'jarfile'
+        //Compared to current approach of '<scheme>:<name>'
+        readAttachmentFromMongo(doc, attachmentUri, sink)
+      case s if attachmentStore.isDefined && attachmentStore.get.scheme == s =>
+        attachmentStore.get.readAttachment(doc.id, attachmentUri.path.toString, sink)
+      case _ =>
+        throw new IllegalArgumentException(s"Unknown attachment scheme in attachment uri $attachmentUri")
+    }
+  }
+
+  private def readAttachmentFromMongo[T](doc: DocInfo, attachmentUri: Uri, sink: Sink[ByteString, Future[T]])(
+    implicit transid: TransactionId): Future[T] = {
+
+    val attachmentName = attachmentUri.path.toString
     val start = transid.started(
       this,
       LoggingMarkers.DATABASE_ATT_GET,
-      s"[ATT_GET] '$dbName' finding attachment '$name' of document '$doc'")
+      s"[ATT_GET] '$dbName' finding attachment '$attachmentName' of document '$doc'")
 
     require(doc != null, "doc undefined")
     require(doc.rev.rev != null, "doc revision must be specified")
@@ -448,7 +486,10 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
         .runWith(sink)
         .map { result =>
           transid
-            .finished(this, start, s"[ATT_GET] '$collection' completed: found attachment '$name' of document '$doc'")
+            .finished(
+              this,
+              start,
+              s"[ATT_GET] '$collection' completed: found attachment '$attachmentName' of document '$doc'")
           result
         }
     }
@@ -463,13 +504,13 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
               transid.finished(
                 this,
                 start,
-                s"[ATT_GET] '$collection', retrieving attachment '$name' of document '$doc'; not found.")
+                s"[ATT_GET] '$collection', retrieving attachment '$attachmentName' of document '$doc'; not found.")
               NoDocumentException("Not found on 'readAttachment'.")
             case ex: MongoGridFSException =>
               transid.failed(
                 this,
                 start,
-                s"[ATT_GET] '$collection' failed to get attachment '$name' of document '$doc'; error code: '${ex.getCode}'",
+                s"[ATT_GET] '$collection' failed to get attachment '$attachmentName' of document '$doc'; error code: '${ex.getCode}'",
                 ErrorLevel)
               throw new Exception("Unexpected mongodb server error: " + ex.getMessage)
             case t => t
@@ -479,7 +520,7 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
     val f = for {
       file <- getGridFSFile
       result <- readStream(file)
-    } yield (getContentType(file), result)
+    } yield result
 
     reportFailure(
       f,
@@ -487,8 +528,9 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
         transid.failed(
           this,
           start,
-          s"[ATT_GET] '$dbName' internal error, name: '$name', doc: '$doc', failure: '${failure.getMessage}'",
+          s"[ATT_GET] '$dbName' internal error, name: '$attachmentName', doc: '$doc', failure: '${failure.getMessage}'",
           ErrorLevel))
+
   }
 
   override protected[core] def deleteAttachments[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] = {
@@ -529,7 +571,8 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](client: MongoClien
   }
 
   override def shutdown(): Unit = {
-    logging.info(this, "mongo-scala-driver doesn't need to manage connections explicitly")
+    clientRef.close()
+    attachmentStore.foreach(_.shutdown())
   }
 
   private def reportFailure[T, U](f: Future[T], onFailure: Throwable => U): Future[T] = {

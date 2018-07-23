@@ -17,6 +17,7 @@
 
 package whisk.core.database.mongodb
 
+import java.io.Closeable
 import java.net.URLEncoder
 
 import akka.actor.ActorSystem
@@ -48,6 +49,10 @@ case class MongoDbConfig(hosts: String,
   }
 }
 
+case class ClientHolder(client: MongoClient) extends Closeable {
+  override def close(): Unit = client.close()
+}
+
 class ClientNotInitException extends Exception {
   override def toString: String = {
     "The MongoDB client is not inited"
@@ -74,6 +79,8 @@ object MongoDbClient {
 
 object MongoDbStoreProvider extends ArtifactStoreProvider {
   private val dbConfig = loadConfigOrThrow[MongoDbConfig](ConfigKeys.mongodb)
+  type DocumentClientRef = ReferenceCounted[ClientHolder]#CountedReference
+  private var clientRef: ReferenceCounted[ClientHolder] = _
 
   def makeStore[D <: DocumentSerializer: ClassTag](useBatching: Boolean)(
     implicit jsonFormat: RootJsonFormat[D],
@@ -82,22 +89,23 @@ object MongoDbStoreProvider extends ArtifactStoreProvider {
     logging: Logging,
     materializer: ActorMaterializer): ArtifactStore[D] = {
 
-    MongoDbClient.setup(dbConfig)
-    val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]], MongoDbClient.client)
+    val inliningConfig = loadConfigOrThrow[InliningConfig](ConfigKeys.db)
+
+    val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]])
     new MongoDbStore[D](
-      MongoDbClient.client,
+      getOrCreateReference(dbConfig),
       dbConfig.database,
       dbConfig.collectionFor[D],
       handler,
       mapper,
-      useBatching)
+      inliningConfig,
+      getAttachmentStore())
   }
 
-  private def handlerAndMapper[D](entityType: ClassTag[D], client: MongoClient)(
+  private def handlerAndMapper[D](entityType: ClassTag[D])(
     implicit actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): (DocumentHandler, MongoViewMapper) = {
-    val db = client.getDatabase(dbConfig.database)
     entityType.runtimeClass match {
       case x if x == classOf[WhiskEntity] =>
         (WhisksHandler, WhisksViewMapper)
@@ -106,5 +114,21 @@ object MongoDbStoreProvider extends ArtifactStoreProvider {
       case x if x == classOf[WhiskAuth] =>
         (SubjectHandler, SubjectViewMapper)
     }
+  }
+
+  /*
+   * This method ensures that all store instances share same client instance and thus the underlying connection pool.
+   * Synchronization is required to ensure concurrent init of various store instances share same ref instance
+   */
+  private def getOrCreateReference(config: MongoDbConfig) = synchronized {
+    if (clientRef == null || clientRef.isClosed) {
+      clientRef = createReference(config)
+    }
+    clientRef.reference()
+  }
+
+  private def createReference(config: MongoDbConfig) = {
+    MongoDbClient.setup(dbConfig)
+    new ReferenceCounted[ClientHolder](ClientHolder(MongoDbClient.client))
   }
 }

@@ -53,8 +53,8 @@
         }]
       }
     commands: |
-      db=db.getSiblingDB('{{ mongodb_database }}');
-      db.auth('{{ db_username }}', '{{ db_password }}');
+      db=db.getSiblingDB('{{ db.mongodb.database }}');
+      db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
       db.getCollection('{{ dbName }}').save({{ doc }});
   with_items: "{{ db.authkeys }}"
   when: db.backend == "MongoDB"
@@ -69,7 +69,7 @@
         {'namespaces.uuid': -1, 'namespaces.key': -1}
       ]
     commands: |
-      db=db.getSiblingDB('{{ mongodb_database }}');
-      db.auth('{{ db_username }}', '{{ db_password }}');
+      db=db.getSiblingDB('{{ db.mongodb.database }}');
+      db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
       db.getCollection('{{ dbName }}').createIndexes({{ doc }});
   when: db.backend == "MongoDB"
