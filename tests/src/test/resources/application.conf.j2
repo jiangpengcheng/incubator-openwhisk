@@ -55,8 +55,8 @@ whisk {
 
     mongodb {
         hosts       = "{{ mongodb_connect_string }}"
-        replica-set = "{{ mongodb_replicaSet }}"
-        database    = "{{ mongodb_database }}"
+        replica-set = "{{ db.mongodb.replica_set }}"
+        database    = "{{ db.mongodb.database }}"
         username    = "{{ db.credentials.admin.user }}"
         password    = "{{ db.credentials.admin.pass }}"
         collections {

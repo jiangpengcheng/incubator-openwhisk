@@ -47,4 +47,7 @@ class MongoDBArtifactStoreTests extends FlatSpec with ArtifactStoreBehavior {
     implicit val docReader: DocumentReader = WhiskDocumentReader
     MongoDbStoreProvider.makeStore[WhiskActivation]()
   }
+
+  override protected def getAttachmentStore(store: ArtifactStore[_]) =
+    store.asInstanceOf[MongoDbStore[_]].attachmentStore
 }
