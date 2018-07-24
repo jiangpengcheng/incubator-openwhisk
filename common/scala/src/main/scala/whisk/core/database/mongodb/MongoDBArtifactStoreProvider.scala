@@ -80,10 +80,11 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
     actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): ArtifactStore[D] = {
-    makeArtifactStore(getAttachmentStore())
+    makeArtifactStore(dbConfig, getAttachmentStore())
   }
 
-  def makeArtifactStore[D <: DocumentSerializer: ClassTag](attachmentStore: Option[AttachmentStore])(
+  def makeArtifactStore[D <: DocumentSerializer: ClassTag](config: MongoDBConfig,
+                                                           attachmentStore: Option[AttachmentStore])(
     implicit jsonFormat: RootJsonFormat[D],
     docReader: DocumentReader,
     actorSystem: ActorSystem,
@@ -94,9 +95,9 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
 
     val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]])
     new MongoDBArtifactStore[D](
-      getOrCreateReference(dbConfig),
-      dbConfig.database,
-      dbConfig.collectionFor[D],
+      getOrCreateReference(config),
+      config.database,
+      config.collectionFor[D],
       handler,
       mapper,
       inliningConfig,

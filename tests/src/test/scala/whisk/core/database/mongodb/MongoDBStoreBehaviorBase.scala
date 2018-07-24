@@ -22,6 +22,7 @@ import pureconfig.loadConfigOrThrow
 import whisk.core.ConfigKeys
 import whisk.core.database.test.behavior.ArtifactStoreBehaviorBase
 import whisk.core.database.{ArtifactStore, AttachmentStore, DocumentSerializer}
+import whisk.core.database.test.behavior.ArtifactStoreTestUtil.storeAvailable
 import whisk.core.entity.{
   DocumentReader,
   WhiskActivation,
@@ -37,15 +38,17 @@ import scala.util.Try
 trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override def storeType = "MongoDB"
 
-  override lazy val storeAvailableCheck: Try[Any] = Try { loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb) }
+  override lazy val storeAvailableCheck: Try[Any] = storeConfigTry
+
+  private def storeConfig = storeConfigTry.get
 
   override lazy val authStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
-    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](getAttachmentStore[WhiskAuth]())
+    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](storeConfig, getAttachmentStore[WhiskAuth]())
   }
 
   override lazy val entityStore =
-    MongoDBArtifactStoreProvider.makeStore[WhiskEntity](false)(
+    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskEntity](storeConfig, getAttachmentStore[WhiskEntity]())(
       classTag[WhiskEntity],
       WhiskEntityJsonFormat,
       WhiskDocumentReader,
@@ -56,11 +59,18 @@ trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override lazy val activationStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
     MongoDBArtifactStoreProvider
-      .makeArtifactStore[WhiskActivation](getAttachmentStore[WhiskActivation]())
+      .makeArtifactStore[WhiskActivation](storeConfig, getAttachmentStore[WhiskActivation]())
   }
 
   override protected def getAttachmentStore(store: ArtifactStore[_]) =
     store.asInstanceOf[MongoDBArtifactStore[_]].attachmentStore
 
   protected def getAttachmentStore[D <: DocumentSerializer: ClassTag](): Option[AttachmentStore] = None
+
+  private lazy val storeConfigTry = Try { loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb) }
+
+  override protected def withFixture(test: NoArgTest) = {
+    assume(storeAvailable(storeConfigTry), "MongoDB not configured or available")
+    super.withFixture(test)
+  }
 }
