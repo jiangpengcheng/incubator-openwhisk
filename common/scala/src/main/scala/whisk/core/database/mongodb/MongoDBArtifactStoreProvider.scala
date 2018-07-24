@@ -28,6 +28,7 @@ import whisk.common.Logging
 import whisk.core.ConfigKeys
 import whisk.core.database._
 import whisk.core.entity.{DocumentReader, WhiskActivation, WhiskAuth, WhiskEntity}
+import whisk.core.entity.size._
 import pureconfig._
 
 import scala.reflect.ClassTag
@@ -53,16 +54,10 @@ case class ClientHolder(client: MongoClient) extends Closeable {
   override def close(): Unit = client.close()
 }
 
-class ClientNotInitException extends Exception {
-  override def toString: String = {
-    "The MongoDB client is not inited"
-  }
-}
-
-object MongoDbClient {
+object MongoDBClient {
   var _client: Option[MongoClient] = None
 
-  def setup(config: MongoDBConfig): Unit = {
+  def client(config: MongoDBConfig): MongoClient = {
     if (_client.isEmpty) {
       val username = URLEncoder.encode(config.username, "utf8")
       val password = URLEncoder.encode(config.password, "utf8")
@@ -70,10 +65,7 @@ object MongoDbClient {
         s"mongodb://${username}:${password}@${config.hosts}/?replicaSet=${config.replicaSet}&authSource=${config.database}"
       _client = Some(MongoClient(uri))
     }
-  }
-
-  def client: MongoClient = {
-    _client.getOrElse(throw new ClientNotInitException)
+    _client.get
   }
 }
 
@@ -137,7 +129,6 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
   }
 
   private def createReference(config: MongoDBConfig) = {
-    MongoDbClient.setup(dbConfig)
-    new ReferenceCounted[ClientHolder](ClientHolder(MongoDbClient.client))
+    new ReferenceCounted[ClientHolder](ClientHolder(MongoDBClient.client(dbConfig)))
   }
 }
