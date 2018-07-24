@@ -32,7 +32,7 @@ import pureconfig._
 
 import scala.reflect.ClassTag
 
-case class MongoDbConfig(hosts: String,
+case class MongoDBConfig(hosts: String,
                          username: String,
                          replicaSet: String,
                          password: String,
@@ -62,7 +62,7 @@ class ClientNotInitException extends Exception {
 object MongoDbClient {
   var _client: Option[MongoClient] = None
 
-  def setup(config: MongoDbConfig): Unit = {
+  def setup(config: MongoDBConfig): Unit = {
     if (_client.isEmpty) {
       val username = URLEncoder.encode(config.username, "utf8")
       val password = URLEncoder.encode(config.password, "utf8")
@@ -78,7 +78,7 @@ object MongoDbClient {
 }
 
 object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
-  private val dbConfig = loadConfigOrThrow[MongoDbConfig](ConfigKeys.mongodb)
+  private val dbConfig = loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb)
   type DocumentClientRef = ReferenceCounted[ClientHolder]#CountedReference
   private var clientRef: ReferenceCounted[ClientHolder] = _
 
@@ -88,11 +88,10 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
     actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): ArtifactStore[D] = {
-    makeArtifactStore(false, getAttachmentStore())
+    makeArtifactStore(getAttachmentStore())
   }
 
-  def makeArtifactStore[D <: DocumentSerializer: ClassTag](useBatching: Boolean,
-                                                           attachmentStore: Option[AttachmentStore])(
+  def makeArtifactStore[D <: DocumentSerializer: ClassTag](attachmentStore: Option[AttachmentStore])(
     implicit jsonFormat: RootJsonFormat[D],
     docReader: DocumentReader,
     actorSystem: ActorSystem,
@@ -130,14 +129,14 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
    * This method ensures that all store instances share same client instance and thus the underlying connection pool.
    * Synchronization is required to ensure concurrent init of various store instances share same ref instance
    */
-  private def getOrCreateReference(config: MongoDbConfig) = synchronized {
+  private def getOrCreateReference(config: MongoDBConfig) = synchronized {
     if (clientRef == null || clientRef.isClosed) {
       clientRef = createReference(config)
     }
     clientRef.reference()
   }
 
-  private def createReference(config: MongoDbConfig) = {
+  private def createReference(config: MongoDBConfig) = {
     MongoDbClient.setup(dbConfig)
     new ReferenceCounted[ClientHolder](ClientHolder(MongoDbClient.client))
   }

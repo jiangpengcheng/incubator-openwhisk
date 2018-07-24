@@ -18,6 +18,8 @@
 package whisk.core.database.mongodb
 
 import org.scalatest.FlatSpec
+import pureconfig.loadConfigOrThrow
+import whisk.core.ConfigKeys
 import whisk.core.database.test.behavior.ArtifactStoreBehaviorBase
 import whisk.core.database.{ArtifactStore, AttachmentStore, DocumentSerializer}
 import whisk.core.entity.{
@@ -30,13 +32,16 @@ import whisk.core.entity.{
 }
 
 import scala.reflect.{classTag, ClassTag}
+import scala.util.Try
 
 trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override def storeType = "MongoDB"
 
+  override lazy val storeAvailableCheck: Try[Any] = Try { loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb) }
+
   override lazy val authStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
-    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](useBatching = false, getAttachmentStore[WhiskAuth]())
+    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](getAttachmentStore[WhiskAuth]())
   }
 
   override lazy val entityStore =
@@ -51,7 +56,7 @@ trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override lazy val activationStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
     MongoDBArtifactStoreProvider
-      .makeArtifactStore[WhiskActivation](useBatching = false, getAttachmentStore[WhiskActivation]())
+      .makeArtifactStore[WhiskActivation](getAttachmentStore[WhiskActivation]())
   }
 
   override protected def getAttachmentStore(store: ArtifactStore[_]) =

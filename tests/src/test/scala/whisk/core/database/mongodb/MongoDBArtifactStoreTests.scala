@@ -23,4 +23,4 @@ import org.scalatest.junit.JUnitRunner
 import whisk.core.database.test.behavior.ArtifactStoreBehavior
 
 @RunWith(classOf[JUnitRunner])
-class CouchDBArtifactStoreTests extends FlatSpec with MongoDBStoreBehaviorBase with ArtifactStoreBehavior {}
+class MongoDBArtifactStoreTests extends FlatSpec with MongoDBStoreBehaviorBase with ArtifactStoreBehavior {}
