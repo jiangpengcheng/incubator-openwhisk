@@ -38,17 +38,15 @@ import scala.util.Try
 trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override def storeType = "MongoDB"
 
-  override lazy val storeAvailableCheck: Try[Any] = storeConfigTry
-
-  private def storeConfig = storeConfigTry.get
+  override lazy val storeAvailableCheck: Try[Any] = Try { loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb) }
 
   override lazy val authStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
-    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](storeConfig, getAttachmentStore[WhiskAuth]())
+    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskAuth](getAttachmentStore[WhiskAuth]())
   }
 
   override lazy val entityStore =
-    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskEntity](storeConfig, getAttachmentStore[WhiskEntity]())(
+    MongoDBArtifactStoreProvider.makeArtifactStore[WhiskEntity](getAttachmentStore[WhiskEntity]())(
       classTag[WhiskEntity],
       WhiskEntityJsonFormat,
       WhiskDocumentReader,
@@ -59,7 +57,7 @@ trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
   override lazy val activationStore = {
     implicit val docReader: DocumentReader = WhiskDocumentReader
     MongoDBArtifactStoreProvider
-      .makeArtifactStore[WhiskActivation](storeConfig, getAttachmentStore[WhiskActivation]())
+      .makeArtifactStore[WhiskActivation](getAttachmentStore[WhiskActivation]())
   }
 
   override protected def getAttachmentStore(store: ArtifactStore[_]) =
@@ -67,10 +65,8 @@ trait MongoDBStoreBehaviorBase extends FlatSpec with ArtifactStoreBehaviorBase {
 
   protected def getAttachmentStore[D <: DocumentSerializer: ClassTag](): Option[AttachmentStore] = None
 
-  private lazy val storeConfigTry = Try { loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb) }
-
-  override protected def withFixture(test: NoArgTest) = {
-    assume(storeAvailable(storeConfigTry), "MongoDB not configured or available")
-    super.withFixture(test)
+  override def afterAll(): Unit = {
+    assume(storeAvailable(storeAvailableCheck), "MongoDB not configured or available")
+    super.afterAll()
   }
 }
