@@ -20,7 +20,14 @@ package whisk.core.database.mongodb
 import org.junit.runner.RunWith
 import org.scalatest.FlatSpec
 import org.scalatest.junit.JUnitRunner
-import whisk.core.database.test.behavior.ArtifactStoreBehavior
+import whisk.core.database.DocumentSerializer
+import whisk.core.database.memory.MemoryAttachmentStoreProvider
+import whisk.core.database.test.behavior.ArtifactStoreAttachmentBehaviors
+
+import scala.reflect.ClassTag
 
 @RunWith(classOf[JUnitRunner])
-class CouchDBArtifactStoreTests extends FlatSpec with MongoDBStoreBehaviorBase with ArtifactStoreBehavior {}
+class MongoDBAttachmentStoreTests extends FlatSpec with MongoDBStoreBehaviorBase with ArtifactStoreAttachmentBehaviors {
+  override protected def getAttachmentStore[D <: DocumentSerializer: ClassTag]() =
+    Some(MemoryAttachmentStoreProvider.makeStore[D]())
+}

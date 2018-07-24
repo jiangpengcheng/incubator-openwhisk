@@ -38,14 +38,14 @@ import whisk.common.{Logging, LoggingMarkers, TransactionId}
 import whisk.core.database._
 import whisk.core.entity._
 import whisk.core.database.StoreUtils._
-import whisk.core.database.mongodb.MongoDbStoreProvider.DocumentClientRef
+import whisk.core.database.mongodb.MongoDBArtifactStoreProvider.DocumentClientRef
 import whisk.core.entity.Attachments.Attached
 import whisk.http.Messages
 
 import scala.concurrent.Future
 import scala.util.Try
 
-object MongoDbStore {
+object MongoDBArtifactStore {
   val _computed = "_computed"
   implicit class StringPurge(val s: String) {
     def escapeDollar = {
@@ -69,13 +69,13 @@ object MongoDbStore {
  * @param documentHandler helper class help to simulate the designDoc of CouchDB
  * @param viewMapper helper class help to simulate the designDoc of CouchDB
  */
-class MongoDbStore[DocumentAbstraction <: DocumentSerializer](clientRef: DocumentClientRef,
-                                                              dbName: String,
-                                                              collection: String,
-                                                              documentHandler: DocumentHandler,
-                                                              viewMapper: MongoViewMapper,
-                                                              val inliningConfig: InliningConfig,
-                                                              val attachmentStore: Option[AttachmentStore])(
+class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef: DocumentClientRef,
+                                                                      dbName: String,
+                                                                      collection: String,
+                                                                      documentHandler: DocumentHandler,
+                                                                      viewMapper: MongoViewMapper,
+                                                                      val inliningConfig: InliningConfig,
+                                                                      val attachmentStore: Option[AttachmentStore])(
   implicit system: ActorSystem,
   val logging: Logging,
   jsonFormat: RootJsonFormat[DocumentAbstraction],
@@ -86,7 +86,7 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](clientRef: Documen
     with DefaultJsonProtocol
     with AttachmentSupport[DocumentAbstraction] {
 
-  import whisk.core.database.mongodb.MongoDbStore._
+  import whisk.core.database.mongodb.MongoDBArtifactStore._
 
   protected[core] implicit val executionContext = system.dispatcher
 
@@ -319,7 +319,7 @@ class MongoDbStore[DocumentAbstraction <: DocumentSerializer](clientRef: Documen
             endKey,
             realIncludeDocs,
             JsObject(js.fields - _computed),
-            MongoDbStore.this)
+            MongoDBArtifactStore.this)
         }
       }
       .flatMap(Future.sequence(_))

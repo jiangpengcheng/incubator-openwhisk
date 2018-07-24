@@ -25,7 +25,7 @@ import spray.json.DefaultJsonProtocol._
 
 @RunWith(classOf[JUnitRunner])
 class MongoDBStoreUtilTests extends FlatSpec with Matchers {
-  import whisk.core.database.mongodb.MongoDbStore._
+  import whisk.core.database.mongodb.MongoDBArtifactStore._
 
   behavior of "StringPurge"
 

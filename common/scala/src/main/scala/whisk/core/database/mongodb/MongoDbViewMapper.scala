@@ -21,7 +21,7 @@ import org.mongodb.scala.bson.conversions.Bson
 import org.mongodb.scala.model.Filters._
 import org.mongodb.scala.model.Sorts
 import whisk.core.database.{ActivationHandler, UnsupportedQueryKeys, UnsupportedView, WhisksHandler}
-import whisk.core.database.mongodb.MongoDbStore._computed
+import whisk.core.database.mongodb.MongoDBArtifactStore._computed
 import whisk.core.entity.WhiskEntityQueries
 
 trait MongoViewMapper {

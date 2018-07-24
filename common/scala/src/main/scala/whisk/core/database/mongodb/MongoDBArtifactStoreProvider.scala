@@ -77,7 +77,7 @@ object MongoDbClient {
   }
 }
 
-object MongoDbStoreProvider extends ArtifactStoreProvider {
+object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
   private val dbConfig = loadConfigOrThrow[MongoDbConfig](ConfigKeys.mongodb)
   type DocumentClientRef = ReferenceCounted[ClientHolder]#CountedReference
   private var clientRef: ReferenceCounted[ClientHolder] = _
@@ -88,18 +88,28 @@ object MongoDbStoreProvider extends ArtifactStoreProvider {
     actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): ArtifactStore[D] = {
+    makeArtifactStore(false, getAttachmentStore())
+  }
+
+  def makeArtifactStore[D <: DocumentSerializer: ClassTag](useBatching: Boolean,
+                                                           attachmentStore: Option[AttachmentStore])(
+    implicit jsonFormat: RootJsonFormat[D],
+    docReader: DocumentReader,
+    actorSystem: ActorSystem,
+    logging: Logging,
+    materializer: ActorMaterializer): ArtifactStore[D] = {
 
     val inliningConfig = loadConfigOrThrow[InliningConfig](ConfigKeys.db)
 
     val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]])
-    new MongoDbStore[D](
+    new MongoDBArtifactStore[D](
       getOrCreateReference(dbConfig),
       dbConfig.database,
       dbConfig.collectionFor[D],
       handler,
       mapper,
       inliningConfig,
-      getAttachmentStore())
+      attachmentStore)
   }
 
   private def handlerAndMapper[D](entityType: ClassTag[D])(
