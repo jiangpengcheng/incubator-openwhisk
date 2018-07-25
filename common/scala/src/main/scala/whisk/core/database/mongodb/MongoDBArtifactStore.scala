@@ -18,7 +18,6 @@
 package whisk.core.database.mongodb
 
 import java.security.MessageDigest
-import java.util.NoSuchElementException
 
 import akka.actor.ActorSystem
 import akka.event.Logging.ErrorLevel
@@ -48,12 +47,12 @@ import scala.util.Try
 object MongoDBArtifactStore {
   val _computed = "_computed"
   implicit class StringPurge(val s: String) {
-    def escapeDollar = {
+    def escapeDollar: String = {
       // replace '"$xxx":' to '"_mark_of_dollar_xxx":' as the "$" can not be the first char of field name
       s.replaceAll("\"\\$([^}]+?\":)", "\"_mark_of_dollar_$1")
     }
 
-    def recoverDollar = {
+    def recoverDollar: String = {
       // restore the "$" from "_mark_of_dollar_"
       s.replaceAll("\"_mark_of_dollar_([^}]+?\":)", "\"\\$$1")
     }
@@ -215,8 +214,8 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
     val f = main_collection
       .find(Filters.eq("_id", doc.id.id)) // method deserialize will check whether the _rev matched
       .toFuture()
-      .flatMap(result =>
-        if (result.size == 0) {
+      .map(result =>
+        if (result.isEmpty) {
           transid.finished(this, start, s"[GET] '$collection', document: '$doc'; not found.")
           throw NoDocumentException("not found on 'get'")
         } else {
@@ -225,7 +224,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
           val deserializedDoc = deserialize[A, DocumentAbstraction](doc, response)
           attachmentHandler
             .map(processAttachments(deserializedDoc, response, doc.id.id, _))
-            .getOrElse(Future.successful(deserializedDoc))
+            .getOrElse(deserializedDoc)
       })
       .recoverWith {
         case t: MongoException =>
@@ -234,7 +233,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
             start,
             s"[GET] '$collection' failed to get document: '$doc'; error code: '${t.getCode}'")
           throw new Exception("Unexpected mongodb server error: " + t.getMessage)
-        case e: DeserializationException => throw DocumentUnreadable(Messages.corruptedEntity)
+        case _: DeserializationException => throw DocumentUnreadable(Messages.corruptedEntity)
       }
 
     reportFailure(
@@ -390,48 +389,66 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
     contentType: ContentType,
     docStream: Source[ByteString, _])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
 
-    val attachmentUri = Uri.from(scheme = attachmentScheme, path = UUID().asString)
-    val attached = Attached(attachmentUri.toString(), contentType)
-    val updatedDoc = update(doc, attached)
-
-    for {
-      i1 <- put(updatedDoc)
-      i2 <- attach(i1, attachmentUri.path.toString(), attached.attachmentType, docStream)
-    } yield (i2, attached)
+    if (maxInlineSize.toBytes == 0) {
+      val uri = Uri.from(scheme = attachmentScheme, path = UUID().asString)
+      for {
+        attachResult <- attach(doc, uri.path.toString, contentType, docStream)
+        attached <- Future.successful(
+          Attached(uri.toString, contentType, Some(attachResult.length), Some(attachResult.digest)))
+        docInfo <- put(update(doc, attached))
+      } yield (docInfo, attached)
+    } else {
+      for {
+        bytesOrSource <- inlineOrAttach(docStream)
+        uri = uriOf(bytesOrSource, UUID().asString)
+        attached <- {
+          bytesOrSource match {
+            case Left(bytes) =>
+              Future.successful(Attached(uri.toString, contentType, Some(bytes.size), Some(digest(bytes))))
+            case Right(source) =>
+              attach(doc, uri.path.toString, contentType, source).map { r =>
+                Attached(uri.toString, contentType, Some(r.length), Some(r.digest))
+              }
+          }
+        }
+        docInfo <- put(update(doc, attached))
+      } yield (docInfo, attached)
+    }
   }
 
-  private def attach(doc: DocInfo, name: String, contentType: ContentType, docStream: Source[ByteString, _])(
-    implicit transid: TransactionId): Future[DocInfo] = {
+  private def attach(d: DocumentAbstraction, name: String, contentType: ContentType, docStream: Source[ByteString, _])(
+    implicit transid: TransactionId): Future[AttachResult] = {
+
+    val asJson = d.toDocumentRecord
+    val id: String = asJson.fields("_id").convertTo[String].trim
+    require(!id.isEmpty, "document id must be defined")
 
     val start = transid.started(
       this,
       LoggingMarkers.DATABASE_ATT_SAVE,
-      s"[ATT_PUT] '$collection' uploading attachment '$name' of document '$doc'")
-
-    require(doc != null, "doc undefined")
-    require(doc.rev.rev != null, "doc revision must be specified")
+      s"[ATT_PUT] '$collection' uploading attachment '$name' of document '$id'")
 
     val document: org.bson.Document = new org.bson.Document("contentType", contentType.toString)
     //add the document id to the metadata
-    document.append("belongsTo", doc.id.id)
+    document.append("belongsTo", id)
 
     val option = new GridFSUploadOptions().metadata(document)
 
-    val uploadStream = gridFSBucket.openUploadStream(BsonString(s"${doc.id.id}/$name"), name, option)
+    val uploadStream = gridFSBucket.openUploadStream(BsonString(s"$id/$name"), name, option)
     val sink = AsyncStreamSink(uploadStream)
     val f = docStream
-      .runWith(sink)
-      .map { _ =>
+      .runWith(combinedSink(sink))
+      .map { r =>
         transid
-          .finished(this, start, s"[ATT_PUT] '$collection' completed uploading attachment '$name' of document '$doc'")
-        doc
+          .finished(this, start, s"[ATT_PUT] '$collection' completed uploading attachment '$name' of document '$id'")
+        AttachResult(r.digest, r.length)
       }
       .recover {
         case t: MongoException =>
           transid.failed(
             this,
             start,
-            s"[ATT_PUT] '$collection' failed to upload attachment '$name' of document '$doc'; error code '${t.getCode}'",
+            s"[ATT_PUT] '$collection' failed to upload attachment '$name' of document '$id'; error code '${t.getCode}'",
             ErrorLevel)
           throw new Exception("Unexpected mongodb server error: " + t.getMessage)
       }
@@ -442,7 +459,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
         transid.failed(
           this,
           start,
-          s"[ATT_PUT] '$collection' internal error, name: '$name', doc: '$doc', failure: '${failure.getMessage}'",
+          s"[ATT_PUT] '$collection' internal error, name: '$name', doc: '$id', failure: '${failure.getMessage}'",
           ErrorLevel))
   }
 
@@ -533,7 +550,12 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
 
   }
 
-  override protected[core] def deleteAttachments[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] = {
+  override protected[core] def deleteAttachments[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] =
+    attachmentStore
+      .map(as => as.deleteAttachments(doc.id))
+      .getOrElse(deleteAttachmentsFromMongo(doc)) // For CosmosDB it is expected that the entire document is deleted.
+
+  private def deleteAttachmentsFromMongo[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] = {
     val start = transid.started(
       this,
       LoggingMarkers.DATABASE_ATT_DELETE,
@@ -598,57 +620,27 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
       }
   }
 
-  private def getContentType(file: GridFSFile): ContentType = {
-    val typeString = file.getMetadata.getString("contentType")
-    require(typeString != null, "Did not find 'contentType' in file metadata")
-    ContentType.parse(typeString) match {
-      case Right(ct) => ct
-      case Left(_)   => ContentTypes.`text/plain(UTF-8)` //Should not happen
-    }
-  }
-
   private def processAttachments[A <: DocumentAbstraction](doc: A,
                                                            js: JsObject,
                                                            docId: String,
-                                                           attachmentHandler: (A, Attached) => A): Future[A] = {
-    try {
-      val name = js
-        .fields("exec")
-        .asJsObject()
-        .fields("code")
-        .asJsObject()
-        .fields("attachmentName")
-        .convertTo[String]
-        .replaceFirst(s"^$attachmentScheme:", "")
-      gridFSBucket
-        .find(Filters.eq("_id", s"$docId/$name"))
-        .toFuture
-        .map { results =>
-          results.headOption
-            .map { file =>
-              attachmentHandler(
-                doc,
-                Attached(
-                  getAttachmentName(file.getFilename),
-                  getContentType(file),
-                  Some(file.getLength.toInt),
-                  Some(file.getMD5)))
+                                                           attachmentHandler: (A, Attached) => A): A = {
+    js.fields("exec").asJsObject().fields.get("code").map {
+      case code: JsObject =>
+        code.getFields("attachmentName", "attachmentType", "digest", "length") match {
+          case Seq(JsString(name), JsString(contentTypeValue), JsString(digest), JsNumber(length)) =>
+            val contentType = ContentType.parse(contentTypeValue) match {
+              case Right(ct) => ct
+              case Left(_)   => ContentTypes.NoContentType //Should not happen
             }
-            .getOrElse {
-              throw NoDocumentException(s"Not found attachment for doc: $docId")
-            }
+            attachmentHandler(
+              doc,
+              Attached(getAttachmentName(name), contentType, Some(length.longValue()), Some(digest)))
+          case x =>
+            throw DeserializationException("Attachment json does not have required fields" + x)
         }
-    } catch {
-      case e: DeserializationException =>
-        logging.error(this, s"Failed to get attachment name from doc $docId, error is: ${e.getMessage}")
-        Future.successful(doc)
-      case _: NoSuchElementException =>
-        logging.error(
-          this,
-          s"Content of action $docId seems malformed, doesn't contain embedded field 'exec.code.attachmentName'")
-        Future.successful(doc)
-      case e: Throwable =>
-        throw e
+      case _ => doc
+    } getOrElse {
+      doc // This should not happen as an action always contain field: exec.code
     }
   }
 
