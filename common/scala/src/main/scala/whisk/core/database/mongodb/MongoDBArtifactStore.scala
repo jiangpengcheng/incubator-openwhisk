@@ -378,7 +378,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
       case Some(as) =>
         attachToExternalStore(doc, update, contentType, docStream, oldAttachment, as)
       case None =>
-        attachToMongo(doc, update, contentType, docStream)
+        attachToMongo(doc, update, contentType, docStream, oldAttachment)
     }
 
   }
@@ -387,33 +387,39 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
     doc: A,
     update: (A, Attached) => A,
     contentType: ContentType,
-    docStream: Source[ByteString, _])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
+    docStream: Source[ByteString, _],
+    oldAttachment: Option[Attached])(implicit transid: TransactionId): Future[(DocInfo, Attached)] = {
 
-    if (maxInlineSize.toBytes == 0) {
-      val uri = Uri.from(scheme = attachmentScheme, path = UUID().asString)
-      for {
-        attachResult <- attach(doc, uri.path.toString, contentType, docStream)
-        attached <- Future.successful(
-          Attached(uri.toString, contentType, Some(attachResult.length), Some(attachResult.digest)))
-        docInfo <- put(update(doc, attached))
-      } yield (docInfo, attached)
-    } else {
-      for {
-        bytesOrSource <- inlineOrAttach(docStream)
-        uri = uriOf(bytesOrSource, UUID().asString)
-        attached <- {
-          bytesOrSource match {
-            case Left(bytes) =>
-              Future.successful(Attached(uri.toString, contentType, Some(bytes.size), Some(digest(bytes))))
-            case Right(source) =>
-              attach(doc, uri.path.toString, contentType, source).map { r =>
-                Attached(uri.toString, contentType, Some(r.length), Some(r.digest))
-              }
+    for {
+      bytesOrSource <- inlineOrAttach(docStream)
+      uri = uriOf(bytesOrSource, UUID().asString)
+      attached <- {
+        bytesOrSource match {
+          case Left(bytes) =>
+            Future.successful(Attached(uri.toString, contentType, Some(bytes.size), Some(digest(bytes))))
+          case Right(source) =>
+            attach(doc, uri.path.toString, contentType, source).map { r =>
+              Attached(uri.toString, contentType, Some(r.length), Some(r.digest))
+            }
+        }
+      }
+      docInfo <- put(update(doc, attached))
+
+      //Remove old attachment if it was part of attachmentStore
+      _ <- oldAttachment
+        .map { old =>
+          val oldUri = Uri(old.attachmentName)
+          if (oldUri.scheme == mongodbScheme) {
+            val name = oldUri.path.toString
+            gridFSBucket.delete(BsonString(s"${docInfo.id.id}/$name")).toFuture.map { _ =>
+              true
+            }
+          } else {
+            Future.successful(true)
           }
         }
-        docInfo <- put(update(doc, attached))
-      } yield (docInfo, attached)
-    }
+        .getOrElse(Future.successful(true))
+    } yield (docInfo, attached)
   }
 
   private def attach(d: DocumentAbstraction, name: String, contentType: ContentType, docStream: Source[ByteString, _])(
@@ -553,44 +559,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
   override protected[core] def deleteAttachments[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] =
     attachmentStore
       .map(as => as.deleteAttachments(doc.id))
-      .getOrElse(deleteAttachmentsFromMongo(doc)) // For CosmosDB it is expected that the entire document is deleted.
-
-  private def deleteAttachmentsFromMongo[T](doc: DocInfo)(implicit transid: TransactionId): Future[Boolean] = {
-    val start = transid.started(
-      this,
-      LoggingMarkers.DATABASE_ATT_DELETE,
-      s"[ATT_DELETE] '$dbName' delete attachments of document '$doc'")
-
-    require(doc != null, "doc undefined")
-    require(doc.rev.rev != null, "doc revision must be specified")
-
-    def findExisting = gridFSBucket.find(Filters.eq("metadata.belongsTo", doc.id.id)).toFuture()
-
-    def delete(files: Seq[GridFSFile]) = {
-      val d = files.map(f => gridFSBucket.delete(f.getId).head())
-      Future.sequence(d)
-    }
-
-    val f = for {
-      files <- findExisting
-      _ <- delete(files)
-    } yield true
-
-    f.onSuccess {
-      case _ =>
-        transid
-          .finished(this, start, s"[ATT_DEL] '$collection' successfully deleted attachments of document '$doc'")
-    }
-
-    reportFailure(
-      f,
-      failure =>
-        transid.failed(
-          this,
-          start,
-          s"[ATT_DELETE] '$dbName' internal error, doc: '$doc', failure: '${failure.getMessage}'",
-          ErrorLevel))
-  }
+      .getOrElse(Future.successful(true)) // For MongoDB it is expected that the entire document is deleted.
 
   override def shutdown(): Unit = {
     clientRef.close()
