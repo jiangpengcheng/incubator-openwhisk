@@ -28,6 +28,7 @@ import whisk.core.database._
 import pureconfig._
 import whisk.core.entity.size._
 import whisk.core.ConfigKeys
+import whisk.core.database.ReferenceCounted
 import whisk.core.database.cosmosdb.CosmosDBUtil.createClient
 import whisk.core.entity.{DocumentReader, WhiskActivation, WhiskAuth, WhiskEntity}
 
