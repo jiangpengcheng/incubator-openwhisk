@@ -14,4 +14,17 @@ whisk {
       WhiskActivation = "{{ db.whisk.activations }}"
     }
   }
+  {% if db.backend == 'MongoDB' %}
+  mongodb {
+    hosts       = "{{ db.mongodb.hosts }}"
+    database    = "{{ db.mongodb.database }}"
+    username    = "{{ db.credentials.admin.user }}"
+    password    = "{{ db.credentials.admin.pass }}"
+    collections {
+      WhiskAuth       = "{{ db.whisk.auth }}"
+      WhiskEntity     = "{{ db.whisk.actions }}"
+      WhiskActivation = "{{ db.whisk.activations }}"
+    }
+  }
+  {% endif %}
 }

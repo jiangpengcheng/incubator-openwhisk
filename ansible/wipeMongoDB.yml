@@ -1,0 +1,37 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more contributor
+# license agreements; and to You under the Apache License, Version 2.0.
+---
+# WARNING: This playbook wipes the database. This action is not reversible. Be very careful and know what you are doing.
+
+- hosts: ansible
+  tasks:
+    - name: create necessary indexes on {{ db.whisk.actions }}
+      shell: docker exec mongodb mongo {{ db.mongodb.hosts }} --eval "{{ commands }}"
+      vars:
+        dbName: "{{ db.whisk.actions }}"
+        doc: >
+          [  
+            {'namespace': -1, 'updated': -1},
+            {'_computed.rootns': -1, 'updated': -1}
+          ]
+        commands: |
+          db=db.getSiblingDB('{{ db.mongodb.database }}');
+          db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
+          db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+      when: mode == "deploy"
+
+    - name: create necessary indexes on {{ db.whisk.activations }}
+      shell: docker exec mongodb mongo {{ db.mongodb.hosts }} --eval "{{ commands }}"
+      vars:
+        dbName: "{{ db.whisk.activations }}"
+        doc: >
+          [
+            {'namespace': -1, 'start': -1},
+            {'_computed.nspath': -1, 'start': -1},
+            {'start': -1}
+          ]
+        commands: |
+          db=db.getSiblingDB('{{ db.mongodb.database }}');
+          db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
+          db.getCollection('{{ dbName }}').createIndexes({{ doc }});
+      when: mode == "deploy"

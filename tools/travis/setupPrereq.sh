@@ -31,5 +31,10 @@ $ANSIBLE_CMD couchdb.yml
 $ANSIBLE_CMD initdb.yml
 $ANSIBLE_CMD wipe.yml
 
+# deploy mongodb for unit tests
+$ANSIBLE_CMD mongodb.yml
+$ANSIBLE_CMD initMongoDB
+$ANSIBLE_CMD wipeMongoDB.yml
+
 $ANSIBLE_CMD properties.yml
 echo "Time taken for ${0##*/} is $SECONDS secs"

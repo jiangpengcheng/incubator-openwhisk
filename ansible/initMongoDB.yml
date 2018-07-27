@@ -1,0 +1,42 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more contributor
+# license agreements; and to You under the Apache License, Version 2.0.
+---
+# This playbook will initialize the immortal DBs in the database account.
+# This step is usually done only once per deployment.
+
+- hosts: db 
+  tasks:
+  - name: create necessary "auth" keys
+    shell: docker exec mongodb mongo {{ db.mongodb.hosts }} --eval "{{ commands }}"
+    vars:
+      key: "{{ lookup('file', 'files/auth.{{ item }}') }}"
+      dbName: "{{ db.whisk.auth }}"
+      doc: >
+        {
+          "_id": "{{ item }}",
+          "subject": "{{ item }}",
+          "namespaces": [{
+            "name": "{{ item }}",
+            "uuid": "{{ key.split(":")[0] }}",
+            "key": "{{ key.split(":")[1] }}"
+          }]
+        }
+      commands: |
+        db=db.getSiblingDB('{{ db.mongodb.database }}');
+        db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
+        db.getCollection('{{ dbName }}').save({{ doc }});
+    with_items: "{{ db.authkeys }}"
+
+  - name: create necessary indexes on {{ db.whisk.auth }}
+    shell: docker exec mongodb mongo {{ db.mongodb.hosts }} --eval "{{ commands }}"
+    vars:
+      dbName: "{{ db.whisk.auth }}"
+      doc: >
+        [
+          {'namespaces.name': -1},
+          {'namespaces.uuid': -1, 'namespaces.key': -1}
+        ]
+      commands: |
+        db=db.getSiblingDB('{{ db.mongodb.database }}');
+        db.auth('{{ db.credentials.admin.user }}', '{{ db.credentials.admin.pass }}');
+        db.getCollection('{{ dbName }}').createIndexes({{ doc }});
