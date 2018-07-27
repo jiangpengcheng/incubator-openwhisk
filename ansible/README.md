@@ -102,6 +102,17 @@ db_host=
 db_port=
 ```
 
+or
+```bash
+[db_creds]
+db_username=
+db_password=
+db_host=
+db_port=
+mongodb_database=
+```
+if you want to use MongoDB.
+
 This file is generated automatically if you are using an ephermeral CouchDB instance. Otherwise, you must create it explicitly.
 For convenience, you can use shell environment variables that are read by the playbook to generate the required `db_local.ini` file as shown below.
 
@@ -125,8 +136,12 @@ export OW_DB_PASSWORD=<your cloudant password>
 export OW_DB_PROTOCOL=https
 export OW_DB_HOST=<your cloudant user>.cloudant.com
 export OW_DB_PORT=443
+# below variables are for mongodb
+export OW_MONGODB_DATABASE=<your mongodb database name>
 
 ansible-playbook -i environments/<environment> couchdb.yml --tags ini
+# or below for mongodb
+ansible-playbook -i environments/<environment> mongodb.yml --tags ini
 ```
 
 #### Install Prerequisites
@@ -190,6 +205,24 @@ The playbooks `wipe.yml` and `postdeploy.yml` should be run on a fresh deploymen
 data that include actions and activations are lost.
 
 Use `ansible-playbook -i environments/<environment> openwhisk.yml` to avoid wiping the data store. This is useful to start OpenWhisk after restarting your Operating System.
+
+### Deploying Using MongoDB
+-   Make sure your `db_local.ini` file is [setup for](#setup) MongoDB then execute:
+
+```
+cd <openwhisk_home>
+./gradlew distDocker
+cd ansible
+ansible-playbook -i environments/<environment> mongodb.yml
+ansible-playbook -i environments/<environment> initMongoDB.yml
+ansible-playbook -i environments/<environment> wipeMongoDB.yml
+ansible-playbook -i environments/<environment> apigateway.yml
+ansible-playbook -i environments/<environment> openwhisk.yml -e database_backend=MongoDB
+ansible-playbook -i environments/<environment> postdeploy.yml
+```
+You need to run `initdb.yml` **every time** you do a fresh deploy MongoDB to initialize the subjects database.
+The playbooks `wipe.yml` and `postdeploy.yml` should be run on a fresh deployment only, otherwise all transient
+data that include actions and activations are lost.
 
 ### Configuring the installation of `wsk` CLI
 There are two installation modes to install `wsk` CLI: remote and local.

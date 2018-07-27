@@ -35,7 +35,6 @@ import scala.reflect.ClassTag
 
 case class MongoDBConfig(hosts: String,
                          username: String,
-                         replicaSet: String,
                          password: String,
                          database: String,
                          collections: Map[String, String]) {
@@ -62,7 +61,7 @@ object MongoDBClient {
       val username = URLEncoder.encode(config.username, "utf8")
       val password = URLEncoder.encode(config.password, "utf8")
       val uri =
-        s"mongodb://${username}:${password}@${config.hosts}/?replicaSet=${config.replicaSet}&authSource=${config.database}"
+        s"mongodb://${username}:${password}@${config.hosts}/?authSource=${config.database}"
       _client = Some(MongoClient(uri))
     }
     _client.get
