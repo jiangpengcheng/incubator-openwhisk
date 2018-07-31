@@ -6,9 +6,6 @@
 
 - hosts: ansible
   tasks:
-  # as the smallest permission unit of mongodb is database, and whisks/activations/subjects are
-  # all saved in a same database with different collections, so we can only create users for 
-  # controllers and invokers with ReadWrite permissions on the database
   - name: "create user in {{ db.mongodb.database }}"
     mongodb:
       database: "{{ db.mongodb.database }}"

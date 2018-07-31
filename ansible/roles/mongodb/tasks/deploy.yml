@@ -1,7 +1,8 @@
 # Licensed to the Apache Software Foundation (ASF) under one or more contributor
 # license agreements; and to You under the Apache License, Version 2.0.
 ---
-# This role will run a MongoDB server on the db group
+# This role will run a MongoDB server on the db group, this is only for test, please use
+# shared cluster for production env
 
 - name: ensure mongodb config directory exists
   file:
@@ -72,7 +73,7 @@
     login_host: "{{ db.host }}"
     login_port: "{{ db.port }}"
     login_database: "admin"
-    name: "{{ db.credentials.admin.user }}"
+    user: "{{ db.credentials.admin.user }}"
     password: "{{ db.credentials.admin.pass }}"
     roles: "dbOwner"
-    mode: "user"
+    force_update: True

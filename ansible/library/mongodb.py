@@ -301,7 +301,7 @@ def main():
             database=dict(required=True, aliases=['db']),
             ssl=dict(default=False, type='bool'),
             ssl_cert_reqs=dict(default='CERT_REQUIRED', choices=['CERT_NONE', 'CERT_OPTIONAL', 'CERT_REQUIRED']),
-            mode=dict(default=user, choices=['user', 'doc', 'index']),
+            mode=dict(default='user', choices=['user', 'doc', 'index']),
             user=dict(default=None),
             password=dict(default=None, no_log=True),
             roles=dict(default=None, type='list'),

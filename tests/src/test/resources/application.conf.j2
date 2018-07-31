@@ -52,10 +52,10 @@ whisk {
         db       = ${?COSMOSDB_NAME}
     }
 
-    {% if db.backend == 'MongoDB' %}
+    {% if enable_mongodb == 'true' %}
     mongodb {
         host        = "{{ db.host }}"
-        port        = "{{ db.port }}"
+        port        = "{{ mongodb_port| default(db.port) }}"
         database    = "{{ db.mongodb.database }}"
         username    = "{{ db.credentials.admin.user }}"
         password    = "{{ db.credentials.admin.pass }}"

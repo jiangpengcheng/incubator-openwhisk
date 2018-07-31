@@ -32,9 +32,9 @@ $ANSIBLE_CMD initdb.yml
 $ANSIBLE_CMD wipe.yml
 
 # deploy mongodb for unit tests
-$ANSIBLE_CMD mongodb.yml
-$ANSIBLE_CMD initMongoDB
-$ANSIBLE_CMD wipeMongoDB.yml
+$ANSIBLE_CMD mongodb.yml -e db_port=27017 # use a different port other than 5984
+$ANSIBLE_CMD initMongoDB -e db_port=27017
+$ANSIBLE_CMD wipeMongoDB.yml -e db_port=27017
 
-$ANSIBLE_CMD properties.yml
+$ANSIBLE_CMD properties.yml -e enable_mongodb=true -e mongodb_port=27017
 echo "Time taken for ${0##*/} is $SECONDS secs"
