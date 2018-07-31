@@ -33,12 +33,13 @@ import pureconfig._
 
 import scala.reflect.ClassTag
 
-case class MongoDBConfig(hosts: String,
+case class MongoDBConfig(host: String,
+                         port: Int,
                          username: String,
                          password: String,
                          database: String,
                          collections: Map[String, String]) {
-  assume(Set(hosts, username, password).forall(_.nonEmpty), "At least one expected property is missing")
+  assume(Set(host, username, password).forall(_.nonEmpty), "At least one expected property is missing")
 
   def collectionFor[D](implicit tag: ClassTag[D]): String = {
     val entityType = tag.runtimeClass.getSimpleName
@@ -61,7 +62,7 @@ object MongoDBClient {
       val username = URLEncoder.encode(config.username, "utf8")
       val password = URLEncoder.encode(config.password, "utf8")
       val uri =
-        s"mongodb://${username}:${password}@${config.hosts}/?authSource=${config.database}"
+        s"mongodb://$username:$password@${config.host}:${config.port}/?authSource=${config.database}"
       _client = Some(MongoClient(uri))
     }
     _client.get
