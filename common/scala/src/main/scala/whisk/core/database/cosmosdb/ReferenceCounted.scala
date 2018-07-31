@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package whisk.core.database
+package whisk.core.database.cosmosdb
 
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 
-private[database] case class ReferenceCounted[T <: AutoCloseable](private val inner: T) {
+private[cosmosdb] case class ReferenceCounted[T <: AutoCloseable](private val inner: T) {
   private val count = new AtomicInteger(0)
 
   private def inc(): Unit = count.incrementAndGet()

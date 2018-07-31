@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package whisk.core.database
+package whisk.core.database.cosmosdb
 
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner

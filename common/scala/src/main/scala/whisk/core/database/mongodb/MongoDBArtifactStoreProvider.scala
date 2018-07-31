@@ -17,7 +17,6 @@
 
 package whisk.core.database.mongodb
 
-import java.io.Closeable
 import java.net.URLEncoder
 
 import akka.actor.ActorSystem
@@ -50,12 +49,8 @@ case class MongoDBConfig(host: String,
   }
 }
 
-case class ClientHolder(client: MongoClient) extends Closeable {
-  override def close(): Unit = client.close()
-}
-
 object MongoDBClient {
-  var _client: Option[MongoClient] = None
+  private var _client: Option[MongoClient] = None
 
   def client(config: MongoDBConfig): MongoClient = {
     if (_client.isEmpty) {
@@ -71,8 +66,6 @@ object MongoDBClient {
 
 object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
   private val dbConfig = loadConfigOrThrow[MongoDBConfig](ConfigKeys.mongodb)
-  type DocumentClientRef = ReferenceCounted[ClientHolder]#CountedReference
-  private var clientRef: ReferenceCounted[ClientHolder] = _
 
   def makeStore[D <: DocumentSerializer: ClassTag](useBatching: Boolean)(
     implicit jsonFormat: RootJsonFormat[D],
@@ -94,7 +87,7 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
 
     val (handler, mapper) = handlerAndMapper(implicitly[ClassTag[D]])
     new MongoDBArtifactStore[D](
-      getOrCreateReference(dbConfig),
+      MongoDBClient.client(dbConfig),
       dbConfig.database,
       dbConfig.collectionFor[D],
       handler,
@@ -115,20 +108,5 @@ object MongoDBArtifactStoreProvider extends ArtifactStoreProvider {
       case x if x == classOf[WhiskAuth] =>
         (SubjectHandler, SubjectViewMapper)
     }
-  }
-
-  /*
-   * This method ensures that all store instances share same client instance and thus the underlying connection pool.
-   * Synchronization is required to ensure concurrent init of various store instances share same ref instance
-   */
-  private def getOrCreateReference(config: MongoDBConfig) = synchronized {
-    if (clientRef == null || clientRef.isClosed) {
-      clientRef = createReference(config)
-    }
-    clientRef.reference()
-  }
-
-  private def createReference(config: MongoDBConfig) = {
-    new ReferenceCounted[ClientHolder](ClientHolder(MongoDBClient.client(dbConfig)))
   }
 }

@@ -31,13 +31,12 @@ import org.mongodb.scala.bson.BsonString
 import org.mongodb.scala.bson.collection.immutable.Document
 import org.mongodb.scala.gridfs.{GridFSBucket, GridFSFile, MongoGridFSException}
 import org.mongodb.scala.model._
-import org.mongodb.scala.MongoException
+import org.mongodb.scala.{MongoClient, MongoException}
 import spray.json._
 import whisk.common.{Logging, LoggingMarkers, TransactionId}
 import whisk.core.database._
 import whisk.core.entity._
 import whisk.core.database.StoreUtils._
-import whisk.core.database.mongodb.MongoDBArtifactStoreProvider.DocumentClientRef
 import whisk.core.entity.Attachments.Attached
 import whisk.http.Messages
 
@@ -62,13 +61,13 @@ object MongoDBArtifactStore {
 /**
  * Basic client to put and delete artifacts in a data store.
  *
- * @param clientRef the mongodb client reference to access database
+ * @param client the mongodb client to access database
  * @param dbName the name of the database to operate on
  * @param collection the name of the collection to operate on
  * @param documentHandler helper class help to simulate the designDoc of CouchDB
  * @param viewMapper helper class help to simulate the designDoc of CouchDB
  */
-class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef: DocumentClientRef,
+class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](client: MongoClient,
                                                                       dbName: String,
                                                                       collection: String,
                                                                       documentHandler: DocumentHandler,
@@ -91,8 +90,6 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
 
   private val mongodbScheme = "mongodb"
   val attachmentScheme: String = attachmentStore.map(_.scheme).getOrElse(mongodbScheme)
-
-  private val client = clientRef.get.client
 
   private val database = client.getDatabase(dbName)
   private val main_collection = database.getCollection(collection)
@@ -562,7 +559,7 @@ class MongoDBArtifactStore[DocumentAbstraction <: DocumentSerializer](clientRef:
       .getOrElse(Future.successful(true)) // For MongoDB it is expected that the entire document is deleted.
 
   override def shutdown(): Unit = {
-    clientRef.close()
+    // MongoClient maintains the connection pool internally, we don't need to manage it
     attachmentStore.foreach(_.shutdown())
   }
 
