@@ -246,7 +246,17 @@
 - name: merge mongodb env variables
   set_fact:
     env: "{{ env | combine(mongodb.commonEnv) | combine(mongodb.envForController) }}"
-  when: db.backend == "MongoDB"
+  when: db.artifact_store.backend == "MongoDB" or db.activation_store.backend == "MongoDB"
+
+- name: merge mongodb artifact store spi env
+  set_fact:
+    env: "{{ env | combine(mongodb.envForArtifactStore) }}"
+  when: db.artifact_store.backend == "MongoDB"
+
+- name: merge mongodb activation store spi env
+  set_fact:
+    env: "{{ env | combine(mongodb.envForActivationStore) }}"
+  when: db.activation_store.backend == "MongoDB"
 
 - name: populate volumes for controller
   set_fact:

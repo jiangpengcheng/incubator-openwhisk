@@ -226,7 +226,6 @@ db:
   protocol: "{{ db_protocol | default(lookup('ini', 'db_protocol section=db_creds file={{ playbook_dir }}/db_local.ini')) }}"
   port: "{{ db_port | default(lookup('ini', 'db_port section=db_creds file={{ playbook_dir }}/db_local.ini')) }}"
   host: "{{ db_host | default(lookup('ini', 'db_host section=db_creds file={{ playbook_dir }}/db_local.ini')) }}"
-  backend: "{{ database_backend | default('CouchDB') }}"
   confdir: "{{ config_root_dir }}/database"
   instances: "{{ groups['db'] | length }}"
   authkeys:
@@ -246,6 +245,10 @@ db:
     invoker:
       user: "{{ db_invoker_user | default(lookup('ini', 'db_username section=invoker file={{ playbook_dir }}/db_local.ini')) }}"
       pass: "{{ db_invoker_pass | default(lookup('ini', 'db_password section=invoker file={{ playbook_dir }}/db_local.ini')) }}"
+  artifact_store:
+      backend: "{{ db_artifact_backend | default('CouchDB') }}"
+  activation_store:
+      backend: "{{ db_activation_backend | default('CouchDB') }}"
   mongodb:
     database: "{{ mongodb_database | default(lookup('ini', 'mongodb_database section=db_creds file={{ playbook_dir }}/db_local.ini')) }}"
     data_volume: "{{ mongodb_data_volume | default('mongo-data') }}"
@@ -270,13 +273,18 @@ couchdb:
 mongodb:
   version: 3.6.6
   commonEnv:
-    CONFIG_whisk_mongodb_host: "{{ db.host }}"
-    CONFIG_whisk_mongodb_port: "{{ db.port }}"
+    # there maybe a chance that mongodb and couchdb are both exists, the mongodb for activation store and
+    # the couchd for artifact store, use mongodb_host and mongodb_port here to avoide conflicts
+    CONFIG_whisk_mongodb_host: "{{ mongodb_host | default(db.host) }}"
+    CONFIG_whisk_mongodb_port: "{{ mongodb_port | default(db.port) }}"
     CONFIG_whisk_mongodb_database: "{{ db.mongodb.database }}"
     CONFIG_whisk_mongodb_collections_WhiskAuth: "{{ db.whisk.auth }}"
     CONFIG_whisk_mongodb_collections_WhiskEntity: "{{ db.whisk.actions }}"
     CONFIG_whisk_mongodb_collections_WhiskActivation: "{{ db.whisk.activations }}"
+  envForArtifactoStore:
     CONFIG_whisk_spi_ArtifactStoreProvider: "whisk.core.database.mongodb.MongoDBArtifactStoreProvider"
+  envForActivationStore:
+    CONFIG_whisk_spi_ActivationStoreProvider: "whisk.core.database.mongodb.MongoDBActivationStoreProvider"
   envForController:
     CONFIG_whisk_mongodb_username: "{{ db.credentials.controller.user }}"
     CONFIG_whisk_mongodb_password: "{{ db.credentials.controller.pass }}"

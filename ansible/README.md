@@ -217,7 +217,8 @@ ansible-playbook -i environments/<environment> mongodb.yml
 ansible-playbook -i environments/<environment> initMongoDB.yml
 ansible-playbook -i environments/<environment> wipeMongoDB.yml
 ansible-playbook -i environments/<environment> apigateway.yml
-ansible-playbook -i environments/<environment> openwhisk.yml -e database_backend=MongoDB
+# There is also an variable for only saving activations to MongoDB, "-e db_activation_backend=MongoDB"
+ansible-playbook -i environments/<environment> openwhisk.yml -e db_artifact_backend=MongoDB
 ansible-playbook -i environments/<environment> postdeploy.yml
 ```
 You need to run `initdb.yml` **every time** you do a fresh deploy MongoDB to initialize the subjects database.

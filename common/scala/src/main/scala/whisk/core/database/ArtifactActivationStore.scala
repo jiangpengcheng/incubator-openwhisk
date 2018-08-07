@@ -33,7 +33,7 @@ class ArtifactActivationStore(actorSystem: ActorSystem, actorMaterializer: Actor
 
   implicit val executionContext = actorSystem.dispatcher
 
-  private val artifactStore: ArtifactStore[WhiskActivation] =
+  protected val artifactStore: ArtifactStore[WhiskActivation] =
     WhiskActivationStore.datastore()(actorSystem, logging, actorMaterializer)
 
   def store(activation: WhiskActivation)(implicit transid: TransactionId,

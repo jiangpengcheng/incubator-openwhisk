@@ -14,10 +14,10 @@ whisk {
       WhiskActivation = "{{ db.whisk.activations }}"
     }
   }
-  {% if db.backend == 'MongoDB' %}
+  {% if db.artifact_store.backend == 'MongoDB' or db.activation_store.backend == 'MongoDB' %}
   mongodb {
-    host        = "{{ db.host }}"
-    port        = "{{ db.port }}"
+    host        = "{{ mongodb_host | default(db.host) }}"
+    port        = "{{ mongodb_port | default(db.port) }}"
     database    = "{{ db.mongodb.database }}"
     username    = "{{ db.credentials.admin.user }}"
     password    = "{{ db.credentials.admin.pass }}"
