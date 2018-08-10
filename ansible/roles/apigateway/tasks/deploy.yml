@@ -29,6 +29,3 @@
   until: result.status == 200
   retries: 12
   delay: 5
-
-- name: install tzdata on apigateway
-  shell: docker exec apigateway sh -c "apk add -u tzdata && api-gateway -s reload"

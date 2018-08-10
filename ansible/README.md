@@ -361,9 +361,4 @@ limits:
 - The `limits.sequenceMaxLength` represents the maximum length of a sequence action.
 
 #### Set the timezone for containers
-The default timezone is `UTC`, which may differ from your servers, and makes it a litter difficult to analyse error logs, the configuration locates in [./group_vars/all](./group_vars/all) and may be changed by modifying the group_vars or by passing extra var to ansible-playbook(`-e docker_timzone=xxx`) for your specific environment.
-```
-docker:
-  ...
-  timezone: "{{ docker_timezone | default('UTC') }}"
-```
+The default timezone for all system containers is UTC. The timezone may differ from your servers which could make it difficult to inspect logs. The timezone is configured globally in [group_vars/all](./group_vars/all#L280) or by passing an extra variable -e docker_timzone=xxx when you run an ansible-playbook.
