@@ -202,6 +202,45 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     }
   }
 
+  it should "get action by name and version" in {
+    implicit val tid = transid()
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    put(entityStore, action)
+
+    Get(s"$collectionPath/${action.name}") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action)
+    }
+
+    val action2 = action.copy(version = action.version.upPatch)
+    put(entityStore, action2)
+    WhiskActionVersionList.deleteCache(action2.fullyQualifiedName(false))
+
+    // get latest version if version is not specified
+    Get(s"$collectionPath/${action.name}") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action2)
+    }
+
+    Get(s"$collectionPath/${action.name}?version=0.0.1") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action)
+    }
+
+    Get(s"$collectionPath/${action.name}?version=0.0.2") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action2)
+    }
+
+    Get(s"$collectionPath/${action.name}?version=0.0.3") ~> Route.seal(routes(creds)) ~> check {
+      status should be(NotFound)
+    }
+  }
+
   it should "get action with updated field" in {
     implicit val tid = transid()
 
@@ -337,6 +376,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
         val expectedWhiskActionMetaData = WhiskActionMetaData(
           action.namespace,
           action.name,
+          action.docid,
           execMetaData,
           action.parameters,
           action.limits,
@@ -432,6 +472,52 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
       status should be(OK)
       val response = responseAs[WhiskAction]
       response should be(action)
+    }
+  }
+
+  it should "delete action by name and version" in {
+    implicit val tid = transid()
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    put(entityStore, action)
+
+    val action2 = action.copy(version = action.version.upPatch)
+    put(entityStore, action2)
+
+    val action3 = action2.copy(version = action2.version.upPatch)
+    put(entityStore, action3)
+
+    // delete action@0.0.1, action@0.0.2 and action@0.0.3 should not be deleted
+    Delete(s"$collectionPath/${action.name}?version=0.0.1") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action)
+    }
+
+    Get(s"/$namespace/${collection.path}/${action.name}?version=0.0.1") ~> Route.seal(routes(creds)) ~> check {
+      status should be(NotFound)
+    }
+
+    Get(s"/$namespace/${collection.path}/${action.name}?version=0.0.2") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action2)
+    }
+
+    Get(s"/$namespace/${collection.path}/${action.name}?version=0.0.3") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action3)
+    }
+
+    // it should delete all actions if version is not specified
+    Delete(s"$collectionPath/${action.name}") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action3)
+    }
+
+    Get(s"/$namespace/${collection.path}/${action.name}") ~> Route.seal(routes(creds)) ~> check {
+      status should be(NotFound)
     }
   }
 
@@ -639,40 +725,27 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     put(entityStore, action, false) // install the action into the database directly
 
     var content = JsObject("exec" -> JsObject("code" -> "".toJson, "kind" -> action.exec.kind.toJson))
+    val action2 = action.copy(
+      version = action.version.upPatch,
+      annotations = action.annotations ++ Parameters(WhiskAction.execFieldName, action.exec.kind))
 
     Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
       status should be(OK)
       val response = responseAs[WhiskAction]
-      checkWhiskEntityResponse(
-        response,
-        WhiskAction(
-          action.namespace,
-          action.name,
-          action.exec,
-          action.parameters,
-          action.limits,
-          action.version.upPatch,
-          action.publish,
-          action.annotations ++ Parameters(WhiskAction.execFieldName, action.exec.kind)))
+      checkWhiskEntityResponse(response, action2)
     }
 
     content = """{"annotations":[{"key":"a","value":"B"}]}""".parseJson.asJsObject
+    val action3 =
+      action2.copy(annotations = action2.annotations ++ Parameters("a", "B"), version = action2.version.upPatch)
 
     Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
       deleteAction(action.docid)
+      deleteAction(action2.docid)
+      deleteAction(action3.docid)
       status should be(OK)
       val response = responseAs[WhiskAction]
-      checkWhiskEntityResponse(
-        response,
-        WhiskAction(
-          action.namespace,
-          action.name,
-          action.exec,
-          action.parameters,
-          action.limits,
-          action.version.upPatch.upPatch,
-          action.publish,
-          action.annotations ++ Parameters("a", "B") ++ Parameters(WhiskAction.execFieldName, action.exec.kind)))
+      checkWhiskEntityResponse(response, action3)
     }
   }
 
@@ -690,9 +763,12 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     val content = WhiskActionPut(Some(jsDefault("")))
     put(entityStore, action, false)
 
+    val action2 = action.copy(version = action.version.upPatch)
+
     // create an action sequence
     Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
       deleteAction(action.docid)
+      deleteAction(action2.docid)
       status should be(OK)
       val response = responseAs[WhiskAction]
       response.exec.kind should be(NODEJS10)
@@ -709,9 +785,12 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     val content = WhiskActionPut(Some(jsDefault("")), parameters = Some(Parameters("a", "A")))
     put(entityStore, action, false)
 
+    val action2 = action.copy(version = action.version.upPatch)
+
     // create an action sequence
     Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
       deleteAction(action.docid)
+      deleteAction(action2.docid)
       status should be(OK)
       val response = responseAs[WhiskAction]
       response.exec.kind should be(NODEJS10)
@@ -721,7 +800,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
 
   it should "put should accept request with parameters property" in {
     implicit val tid = transid()
-    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b11111"))
     val content = WhiskActionPut(Some(action.exec), Some(action.parameters))
 
     // it should "reject put action in namespace not owned by subject" in
@@ -750,7 +829,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
 
   it should "put should reject request with parameters property as jsobject" in {
     implicit val tid = transid()
-    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b22222"))
     val content = WhiskActionPut(Some(action.exec), Some(action.parameters))
     val params = """{ "parameters": { "a": "b" } }""".parseJson.asJsObject
     val json = JsObject(WhiskActionPut.serdes.write(content).asJsObject.fields ++ params.fields)
@@ -761,7 +840,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
 
   it should "put should accept request with limits property" in {
     implicit val tid = transid()
-    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b33333"))
     val content = WhiskActionPut(
       Some(action.exec),
       Some(action.parameters),
@@ -793,7 +872,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     implicit val tid = transid()
     val javaAction =
       WhiskAction(namespace, aname(), javaDefault("ZHViZWU=", Some("hello")), annotations = Parameters("exec", "java"))
-    val nodeAction = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    val nodeAction = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b44444"))
     val actions = Seq((javaAction, JAVA_DEFAULT), (nodeAction, NODEJS10))
 
     actions.foreach {
@@ -847,7 +926,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
         stream.toString should include(s"serving from cache: ${CacheKey(action)}")
         stream.reset()
 
-        // update should invalidate cache
+        // update should create new cache for new version
         Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)(transid())) ~> check {
           status should be(OK)
           val response = responseAs[WhiskAction]
@@ -864,11 +943,10 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
               action.annotations ++ systemAnnotations(kind)))
         }
         stream.toString should include(s"entity exists, will try to update '$action'")
-        stream.toString should include(s"invalidating ${CacheKey(action)}")
-        stream.toString should include(s"caching ${CacheKey(action)}")
+        stream.toString should include(s"caching ${CacheKey(action.copy(version = action.version.upPatch))}")
         stream.reset()
 
-        // delete should invalidate cache
+        // delete should invalidate cache for all versions
         Delete(s"$collectionPath/${action.name}") ~> Route.seal(routes(creds)(transid())) ~> check {
           status should be(OK)
           val response = responseAs[WhiskAction]
@@ -885,6 +963,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
               action.annotations ++ systemAnnotations(kind)))
         }
         stream.toString should include(s"invalidating ${CacheKey(action)}")
+        stream.toString should include(s"invalidating ${CacheKey(action.copy(version = action.version.upPatch))}")
         stream.reset()
     }
   }
@@ -896,8 +975,8 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
         aname(),
         javaDefault(nonInlinedCode(entityStore), Some("hello")),
         annotations = Parameters("exec", "java"))
-    val nodeAction = WhiskAction(namespace, aname(), jsDefault(nonInlinedCode(entityStore)), Parameters("x", "b"))
-    val swiftAction = WhiskAction(namespace, aname(), swift(nonInlinedCode(entityStore)), Parameters("x", "b"))
+    val nodeAction = WhiskAction(namespace, aname(), jsDefault(nonInlinedCode(entityStore)), Parameters("x", "b55555"))
+    val swiftAction = WhiskAction(namespace, aname(), swift(nonInlinedCode(entityStore)), Parameters("x", "b66666"))
     val bbAction = WhiskAction(namespace, aname(), bb("bb", nonInlinedCode(entityStore), Some("bbMain")))
     val actions = Seq((javaAction, JAVA_DEFAULT), (nodeAction, NODEJS10), (swiftAction, SWIFT4), (bbAction, BLACKBOX))
 
@@ -1103,6 +1182,7 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
 
         // second request should not fetch from cache
         Get(s"$collectionPath/$name") ~> Route.seal(routes(creds)(transid())) ~> check {
+          deleteAction(action.docid)
           status should be(OK)
           val response = responseAs[WhiskAction]
           checkWhiskEntityResponse(
@@ -1163,6 +1243,8 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
 
     (0 until 5).map { i =>
       Get(s"$collectionPath/$name") ~> Route.seal(routes(creds)(transid())) ~> check {
+        if (i == 4)
+          deleteAction(action.docid)
         status should be(OK)
         val response = responseAs[WhiskAction]
         checkWhiskEntityResponse(response, expectedAction)
@@ -1319,16 +1401,6 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     }
   }
 
-  it should "reject put with conflict for pre-existing action" in {
-    implicit val tid = transid()
-    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
-    val content = WhiskActionPut(Some(action.exec))
-    put(entityStore, action)
-    Put(s"$collectionPath/${action.name}", content) ~> Route.seal(routes(creds)) ~> check {
-      status should be(Conflict)
-    }
-  }
-
   it should "update action with a put" in {
     implicit val tid = transid()
     val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"), ActionLimits())
@@ -1342,26 +1414,25 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
           Some(LogLimit(LogLimit.MAX_LOGSIZE)),
           Some(ConcurrencyLimit(ConcurrencyLimit.MAX_CONCURRENT)))))
     put(entityStore, action)
-    Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
+
+    val action2 = action.copy(
+      exec = content.exec.get,
+      parameters = content.parameters.get,
+      version = action.version.upPatch,
+      annotations = action.annotations ++ systemAnnotations(NODEJS10, create = false),
+      limits = ActionLimits(
+        content.limits.get.timeout.get,
+        content.limits.get.memory.get,
+        content.limits.get.logs.get,
+        content.limits.get.concurrency.get))
+    Put(s"$collectionPath/${action.name}", content) ~> Route.seal(routes(creds)) ~> check {
       deleteAction(action.docid)
+      deleteAction(action2.docid)
       status should be(OK)
       val response = responseAs[WhiskAction]
 
       response.updated should not be action.updated
-      checkWhiskEntityResponse(
-        response,
-        WhiskAction(
-          action.namespace,
-          action.name,
-          content.exec.get,
-          content.parameters.get,
-          ActionLimits(
-            content.limits.get.timeout.get,
-            content.limits.get.memory.get,
-            content.limits.get.logs.get,
-            content.limits.get.concurrency.get),
-          version = action.version.upPatch,
-          annotations = action.annotations ++ systemAnnotations(NODEJS10, create = false)))
+      checkWhiskEntityResponse(response, action2)
     }
   }
 
@@ -1370,19 +1441,52 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
     val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
     val content = WhiskActionPut(parameters = Some(Parameters("x", "X")))
     put(entityStore, action)
-    Put(s"$collectionPath/${action.name}?overwrite=true", content) ~> Route.seal(routes(creds)) ~> check {
+    val action2 = action.copy(
+      version = action.version.upPatch,
+      parameters = content.parameters.get,
+      annotations = action.annotations ++ systemAnnotations(NODEJS10, false))
+    Put(s"$collectionPath/${action.name}", content) ~> Route.seal(routes(creds)) ~> check {
       deleteAction(action.docid)
+      deleteAction(action2.docid)
       status should be(OK)
       val response = responseAs[WhiskAction]
-      checkWhiskEntityResponse(
-        response,
-        WhiskAction(
-          action.namespace,
-          action.name,
-          action.exec,
-          content.parameters.get,
-          version = action.version.upPatch,
-          annotations = action.annotations ++ systemAnnotations(NODEJS10, false)))
+      checkWhiskEntityResponse(response, action2)
+    }
+  }
+
+  it should "create a new action in database instead of replacing old action" in {
+    implicit val tid = transid()
+    val action = WhiskAction(namespace, aname(), jsDefault("??"), Parameters("x", "b"))
+    val content = WhiskActionPut(parameters = Some(Parameters("x", "X")))
+    put(entityStore, action)
+    val action2 = action.copy(
+      parameters = content.parameters.get,
+      version = action.version.upPatch,
+      annotations = action.annotations ++ systemAnnotations(NODEJS10, false))
+    Put(s"$collectionPath/${action.name}", content) ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      checkWhiskEntityResponse(response, action2)
+    }
+
+    // the first version should not be replaced
+    Get(s"$collectionPath/${action.name}?version=0.0.1") ~> Route.seal(routes(creds)) ~> check {
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      response should be(action)
+    }
+
+    // it should update based on latest version, action2 here
+    val content2 = WhiskActionPut(annotations = Some(Parameters("x", "X")))
+    val action3 =
+      action2.copy(annotations = action2.annotations ++ content2.annotations, version = action2.version.upPatch)
+    Put(s"$collectionPath/${action.name}", content2) ~> Route.seal(routes(creds)) ~> check {
+      deleteAction(action.docid)
+      deleteAction(action2.docid)
+      deleteAction(action3.docid)
+      status should be(OK)
+      val response = responseAs[WhiskAction]
+      checkWhiskEntityResponse(response, action3)
     }
   }
 
@@ -1664,6 +1768,8 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
       }
 
       put(entityStore, action)
+      // delete cache for WhiskActionVersionList
+      WhiskActionVersionList.deleteCache(action.fullyQualifiedName(false))
 
       Put(s"$collectionPath/${action.name}?overwrite=true", JsObject.empty) ~> Route.seal(routes(creds)) ~> check {
         status shouldBe BadRequest
@@ -1689,9 +1795,12 @@ class ActionsApiTests extends ControllerTestCommon with WhiskActionsApi {
       }
 
       put(entityStore, action)
+      // delete cache for WhiskActionVersionList
+      WhiskActionVersionList.deleteCache(action.fullyQualifiedName(false))
 
       Put(s"$collectionPath/${action.name}?overwrite=true", okUpdate) ~> Route.seal(routes(creds)) ~> check {
         deleteAction(action.docid)
+        deleteAction(action.copy(version = action.version.upPatch).docid)
         status shouldBe OK
       }
     } finally {

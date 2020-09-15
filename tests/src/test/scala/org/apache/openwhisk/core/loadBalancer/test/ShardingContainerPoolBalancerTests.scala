@@ -38,7 +38,25 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.NestedSemaphore
-import org.apache.openwhisk.core.entity.FullyQualifiedEntityName
+import org.apache.openwhisk.core.entity.{
+  ActivationId,
+  BasicAuthenticationAuthKey,
+  ByteSize,
+  ControllerInstanceId,
+  DocId,
+  EntityName,
+  EntityPath,
+  ExecManifest,
+  FullyQualifiedEntityName,
+  Identity,
+  InvokerInstanceId,
+  MemoryLimit,
+  Namespace,
+  Secret,
+  Subject,
+  UUID,
+  WhiskActionMetaData
+}
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.WhiskConfig
 import org.apache.openwhisk.core.connector.ActivationMessage
@@ -47,22 +65,7 @@ import org.apache.openwhisk.core.connector.Message
 import org.apache.openwhisk.core.connector.MessageConsumer
 import org.apache.openwhisk.core.connector.MessageProducer
 import org.apache.openwhisk.core.connector.MessagingProvider
-import org.apache.openwhisk.core.entity.ActivationId
-import org.apache.openwhisk.core.entity.BasicAuthenticationAuthKey
-import org.apache.openwhisk.core.entity.ControllerInstanceId
-import org.apache.openwhisk.core.entity.EntityName
-import org.apache.openwhisk.core.entity.EntityPath
-import org.apache.openwhisk.core.entity.ExecManifest
-import org.apache.openwhisk.core.entity.Identity
-import org.apache.openwhisk.core.entity.InvokerInstanceId
-import org.apache.openwhisk.core.entity.MemoryLimit
-import org.apache.openwhisk.core.entity.Namespace
-import org.apache.openwhisk.core.entity.Secret
-import org.apache.openwhisk.core.entity.Subject
-import org.apache.openwhisk.core.entity.UUID
-import org.apache.openwhisk.core.entity.WhiskActionMetaData
 import org.apache.openwhisk.core.entity.test.ExecHelpers
-import org.apache.openwhisk.core.entity.ByteSize
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.core.entity.test.ExecHelpers
 import org.apache.openwhisk.core.loadBalancer.FeedFactory
@@ -421,6 +424,7 @@ class ShardingContainerPoolBalancerTests
     WhiskActionMetaData(
       namespace,
       name,
+      DocId(s"$namespace/$name@0.0.1"),
       js10MetaData(Some("jsMain"), false),
       limits = actionLimits(actionMem, concurrency))
   val maxContainers = invokerMem.toMB.toInt / actionMetaData.limits.memory.megabytes
@@ -505,6 +509,7 @@ class ShardingContainerPoolBalancerTests
         actionMetaData.rev,
         Identity(Subject(), Namespace(invocationNamespace, uuid), BasicAuthenticationAuthKey(uuid, Secret())),
         aid,
+        DocId("asd"),
         ControllerInstanceId("0"),
         blocking = false,
         content = None,
