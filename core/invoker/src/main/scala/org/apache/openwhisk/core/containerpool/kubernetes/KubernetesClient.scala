@@ -82,6 +82,8 @@ case class KubernetesEphemeralStorageConfig(limit: ByteSize)
 case class KubernetesPodReadyTimeoutException(timeout: FiniteDuration)
     extends Exception(s"Pod readiness timed out after ${timeout.toSeconds}s")
 
+case class KubernetesImagePullFailedException(msg: String) extends Exception(msg)
+
 /**
  * Exception to indicate a pod could not be created at the apiserver.
  */
@@ -132,6 +134,7 @@ class KubernetesClient(
     config.actionNamespace.foreach(configBuilder.withNamespace)
     new DefaultKubernetesClient(configBuilder.build())
   }
+  private val imagePullFailedMsgs = Set("ImagePullBackOff", "ErrImagePull")
 
   private val podBuilder = new WhiskPodBuilder(kubeRestClient, config)
 
@@ -322,7 +325,15 @@ class KubernetesClient(
       .withName(pod.getMetadata.getName)
     val deadline = deadlineOpt.getOrElse((timeout - (System.currentTimeMillis() - start.toEpochMilli).millis).fromNow)
     if (!readyPod.isReady) {
-      if (deadline.isOverdue()) {
+      // when action pod is failed while pulling images, we need to let users know that
+      val imagePullErr = Try {
+        readyPod.get.getStatus.getContainerStatuses.asScala.exists { status =>
+          imagePullFailedMsgs.contains(status.getState.getWaiting.getReason)
+        }
+      } getOrElse false
+      if (imagePullErr) {
+        Future.failed(KubernetesImagePullFailedException(s"Failed to pull image for pod ${pod.getMetadata.getName}"))
+      } else if (deadline.isOverdue()) {
         Future.failed(KubernetesPodReadyTimeoutException(timeout))
       } else {
         after(1.seconds, scheduler) {
